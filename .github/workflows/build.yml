@@ -1,0 +1,33 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # windows-latest already carries the MSVC toolset the Native AOT compiler links with.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish Native AOT agent
+        run: .\build.ps1 -Zip
+        shell: pwsh
+
+      - name: Report size
+        run: Get-Item dist\TextFix.exe | Select-Object Name, Length
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TextFix-win-x64
+          path: TextFix-win-x64.zip
+          if-no-files-found: error

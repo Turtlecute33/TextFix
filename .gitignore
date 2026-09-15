@@ -1,0 +1,14 @@
+# Build output
+dist/
+bin/
+obj/
+*.zip
+
+# Local editor state
+.vs/
+.idea/
+*.user
+
+# Never commit a real key or a local config
+config.json
+secrets.dat
