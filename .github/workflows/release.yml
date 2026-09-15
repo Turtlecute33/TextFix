@@ -1,0 +1,48 @@
+# Cutting a release is pushing a tag:
+#
+#   git tag v1.0.1 && git push origin v1.0.1
+#
+# Every target in the build matrix is published, zipped and attached to the release, so a new
+# platform appears in the release assets without touching this file.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release'
+        required: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-agent.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          pattern: TextFix-*
+          merge-multiple: true
+
+      # One checksum file covering whatever the matrix produced, so verifying a download does
+      # not depend on which platforms were built.
+      - name: Checksum the assets
+        working-directory: assets
+        run: sha256sum *.zip | tee SHA256SUMS.txt
+
+      - name: Publish release
+        working-directory: assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes *.zip SHA256SUMS.txt

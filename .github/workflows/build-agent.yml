@@ -1,0 +1,45 @@
+# The single place the supported targets are declared. CI (build.yml) and the release
+# (release.yml) both call this workflow, so adding a platform means adding one entry to the
+# matrix below and nothing else: the RID drives the publish, the archive name and the release
+# asset name all the way through.
+name: Build agent
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # windows-latest already carries the MSVC toolset the Native AOT compiler links with.
+          - rid: win-x64
+            runs-on: windows-latest
+          # Add further targets here, for example:
+          # - rid: win-arm64
+          #   runs-on: windows-11-arm
+
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish Native AOT agent
+        run: .\build.ps1 -Rid ${{ matrix.rid }} -Zip
+        shell: pwsh
+
+      - name: Report size
+        run: Get-Item dist\${{ matrix.rid }}\TextFix.exe | Select-Object Name, Length
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TextFix-${{ matrix.rid }}
+          path: TextFix-${{ matrix.rid }}.zip
+          if-no-files-found: error

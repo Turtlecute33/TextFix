@@ -36,8 +36,10 @@ Two actions ship configured, each with its own hotkey and its own editable promp
 
 ## Install
 
-1. Download `TextFix.exe`, or build it yourself with `.\build.ps1`. Put it wherever you keep small
-   tools; `%LOCALAPPDATA%\Programs\TextFix\` is a good spot.
+1. Download `TextFix-win-x64.zip` from the
+   [latest release](https://github.com/Turtlecute33/TextFix/releases/latest) and unzip it, or build
+   it yourself with `.\build.ps1`. Put `TextFix.exe` wherever you keep small tools;
+   `%LOCALAPPDATA%\Programs\TextFix\` is a good spot.
 2. Run it. The settings window opens on first launch and the tray icon appears.
 3. Paste your API key, pick a model, press the hotkey you want into the capture box, tick **Start
    TextFix when I sign in**, and save.
@@ -190,9 +192,10 @@ Ctrl+C with an empty selection, so from outside it is indistinguishable from a s
 ## Building
 
 ```powershell
-.\build.ps1          # -> dist\TextFix.exe
-.\build.ps1 -Zip     # -> TextFix-win-x64.zip
-.\build.ps1 -Run     # publish and start it
+.\build.ps1                 # -> dist\win-x64\TextFix.exe
+.\build.ps1 -Zip            # -> TextFix-win-x64.zip
+.\build.ps1 -Run            # publish and start it
+.\build.ps1 -Rid win-arm64  # -> dist\win-arm64\TextFix.exe
 ```
 
 Needs the .NET 9 SDK and the MSVC C++ build tools, which the Native AOT compiler links with. The
