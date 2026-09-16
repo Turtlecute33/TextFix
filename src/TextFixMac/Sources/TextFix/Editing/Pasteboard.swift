@@ -8,6 +8,13 @@ final class PasteboardSnapshot {
     /// False when something on the pasteboard could not be captured and will be lost.
     var complete = true
 
+    /// What `changeCount` was when this was taken. A restore compares against it and does nothing
+    /// when the pasteboard has not moved since - which is the common case on the Accessibility
+    /// path, where the snapshot is insurance against a fallback that never happened. Writing an
+    /// identical pasteboard back would still bump `changeCount` and still put a duplicate entry in
+    /// the user's clipboard manager.
+    var changeCount = -1
+
     var isEmpty: Bool { items.allSatisfy(\.isEmpty) }
 }
 
@@ -65,6 +72,7 @@ enum PasteboardBridge {
 
     static func snapshot() -> PasteboardSnapshot {
         let snapshot = PasteboardSnapshot()
+        snapshot.changeCount = changeCount
         var budget = maxSnapshotBytes
         guard let items = NSPasteboard.general.pasteboardItems else { return snapshot }
 
@@ -107,6 +115,9 @@ enum PasteboardBridge {
     /// nothing there to begin with - leaving our own scratch content behind would be a change the
     /// user never asked for.
     static func restoreOrClear(_ snapshot: PasteboardSnapshot) {
+        // Nothing has written to the pasteboard since the snapshot was taken, so there is nothing
+        // to put back and every reason not to touch it.
+        guard snapshot.changeCount != changeCount else { return }
         if snapshot.isEmpty { clear() } else { restore(snapshot) }
     }
 

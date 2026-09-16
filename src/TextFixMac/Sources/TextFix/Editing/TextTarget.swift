@@ -109,17 +109,23 @@ enum TextTarget {
             return .failed("That looks like a password field, so nothing was sent.")
         }
 
+        // Taken before the read, not inside the path that borrows the pasteboard, because the
+        // Accessibility read borrows nothing and the *replace* still pastes: without this the
+        // fixed text would be left sitting on the user's clipboard on the fast path. Restoring is
+        // free when nothing touched it - PasteboardSnapshot carries the change count.
+        let saved = options.takeSnapshot ? PasteboardBridge.snapshot() : nil
+
         // Fast path: ask the element directly.
         if options.useAccessibilityRead, let element,
-           let capture = captureViaAccessibility(element: element, pid: pid, options: options) {
+           let capture = captureViaAccessibility(element: element, pid: pid, options: options, saved: saved) {
             return .captured(capture)
         }
 
-        return capturePasteboard(element: element, pid: pid, options: options)
+        return capturePasteboard(element: element, pid: pid, options: options, saved: saved)
     }
 
     private static func captureViaAccessibility(
-        element: AXUIElement, pid: pid_t, options: CaptureOptions
+        element: AXUIElement, pid: pid_t, options: CaptureOptions, saved: PasteboardSnapshot?
     ) -> TextCapture? {
         // An element that answers neither of these is not a text control we can work with, and
         // falling through to the pasteboard probe is the right answer for it.
@@ -130,7 +136,7 @@ enum TextTarget {
             Log.debug("AX read: \(selected.count) selected characters")
             return TextCapture(
                 text: selected, mode: .selection, source: .accessibility, element: element,
-                appPid: pid, fullRange: selectedRange, saved: nil,
+                appPid: pid, fullRange: selectedRange, saved: saved,
                 caretRect: caretRect(element: element, range: selectedRange))
         }
 
@@ -144,14 +150,13 @@ enum TextTarget {
         Log.debug("AX read: whole field, \(whole.count) characters")
         return TextCapture(
             text: whole, mode: .wholeText, source: .accessibility, element: element,
-            appPid: pid, fullRange: CFRange(location: 0, length: length), saved: nil,
+            appPid: pid, fullRange: CFRange(location: 0, length: length), saved: saved,
             caretRect: caretRect(element: element, range: selectedRange))
     }
 
     private static func capturePasteboard(
-        element: AXUIElement?, pid: pid_t, options: CaptureOptions
+        element: AXUIElement?, pid: pid_t, options: CaptureOptions, saved: PasteboardSnapshot?
     ) -> CaptureResult {
-        let saved = options.takeSnapshot ? PasteboardBridge.snapshot() : nil
         var probeMarker: String?
 
         // Every failure below happens after the pasteboard has been overwritten with a probe

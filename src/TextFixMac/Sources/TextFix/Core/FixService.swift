@@ -212,7 +212,11 @@ final class FixService {
 
         switch outcome {
         case .replaced:
-            if let saved = capture.saved, pasteboardWasBorrowed(capture: capture, config: config) {
+            // Whether the pasteboard was borrowed is a fact, not something to infer from the
+            // configured mode: an Accessibility write that was refused falls back to a paste, and
+            // a paste that happened needs the delay whatever asked for it.
+            let pasteboardMoved = capture.saved.map { $0.changeCount != PasteboardBridge.changeCount } ?? false
+            if let saved = capture.saved, pasteboardMoved {
                 // The paste needs the pasteboard to stay put for a moment: some hosts read it
                 // asynchronously after Cmd+V returns.
                 pendingRestore = saved
@@ -245,12 +249,6 @@ final class FixService {
             restorePasteboardNow(capture.saved)
             notify("Text fix failed", "Could not put the fixed text back.", isError: true)
         }
-    }
-
-    /// True when the replacement went through the pasteboard, which is the only case where there is
-    /// anything to restore on a delay.
-    private func pasteboardWasBorrowed(capture: TextCapture, config: AppConfig) -> Bool {
-        config.replaceModeValue == .paste || capture.source == .pasteboard
     }
 
     // ---- shared ----
