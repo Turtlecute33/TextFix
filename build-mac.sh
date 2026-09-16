@@ -45,7 +45,7 @@ command -v swift >/dev/null || { echo "swift was not found. Install the Xcode co
 arch_flags=()
 for arch in "${archs[@]}"; do arch_flags+=(--arch "$arch"); done
 arch_label="$(IFS=-; echo "${archs[*]}")"
-[[ ${#archs[@]} -gt 1 ]] && arch_label="universal"
+if [[ ${#archs[@]} -gt 1 ]]; then arch_label="universal"; fi
 
 echo "==> Building $configuration for ${archs[*]}"
 swift build --package-path "$package" -c "$configuration" "${arch_flags[@]}"
@@ -60,7 +60,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
 cp "$binary" "$app/Contents/MacOS/TextFix"
 # Symbols are a third of the binary and nothing reads them in a release the user downloads.
-[[ "$configuration" == "release" ]] && strip -x "$app/Contents/MacOS/TextFix"
+if [[ "$configuration" == "release" ]]; then strip -x "$app/Contents/MacOS/TextFix"; fi
 
 sed "s/__VERSION__/$version/g" "$package/Resources/Info.plist" > "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
@@ -76,15 +76,16 @@ rm -rf "$(dirname "$iconset")"
 # not get the app past Gatekeeper on another machine - see the README for the one-time
 # right-click > Open, which is the honest cost of shipping without a $99/year account.
 identity="${MACOS_SIGN_IDENTITY:--}"
-extra_flags=()
-if [[ "$identity" != "-" ]]; then
-    extra_flags+=(--options runtime --timestamp)
-    echo "==> Signing with $identity"
-else
+# Written out twice rather than assembled from a flag array: expanding an empty array under
+# `set -u` is an error in the bash macOS ships, and the two commands differ by two flags.
+if [[ "$identity" == "-" ]]; then
     echo "==> Ad-hoc signing"
+    codesign --force --sign - --identifier com.turtlecute33.textfix "$app"
+else
+    echo "==> Signing with $identity"
+    codesign --force --sign "$identity" --identifier com.turtlecute33.textfix \
+        --options runtime --timestamp "$app"
 fi
-codesign --force --sign "$identity" --identifier com.turtlecute33.textfix \
-    "${extra_flags[@]}" "$app"
 codesign --verify --strict "$app"
 
 size_kb=$(( $(stat -f%z "$app/Contents/MacOS/TextFix") / 1024 ))
