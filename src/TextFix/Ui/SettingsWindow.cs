@@ -33,6 +33,7 @@ internal sealed unsafe class SettingsWindow
     private const int IdNotify = 108;
     private const int IdAutostart = 109;
     private const int IdIndicator = 110;
+    private const int IdGetKey = 111;
     private const int IdActionBase = 200;
     private const int IdActionStride = 10;
     private const int IdActionEnabledOffset = 0;
@@ -99,7 +100,7 @@ internal sealed unsafe class SettingsWindow
 
     /// <summary>Client-area design size, in 96-dpi units.</summary>
     private const int DesignWidth = 616;
-    private const int DesignHeight = 628;
+    private const int DesignHeight = 656;
 
     internal bool Show(nint owner)
     {
@@ -198,7 +199,14 @@ internal sealed unsafe class SettingsWindow
         const int fieldX = 152;
         const int rowH = 24;
         const int checkH = 22;
+        const int checkW = 448;
         int y = 14;
+
+        // Two labelled groups rather than one undifferentiated column: everything above the first
+        // rule is about which model answers, everything below it is about what the agent does on
+        // this machine. The action blocks below already used this shape; the top half did not.
+        LabelBold(labelX, y, 200, 18, "Provider and model");
+        y += 22;
 
         Label(labelX, y + 4, labelW, 18, "Provider");
         nint provider = Combo(fieldX, y, 200, IdProvider);
@@ -207,8 +215,10 @@ internal sealed unsafe class SettingsWindow
         y += 32;
 
         Label(labelX, y + 4, labelW, 18, "API key");
-        nint apiKey = Edit(fieldX, y, 448, rowH, IdApiKey, ES_PASSWORD | ES_AUTOHSCROLL);
+        nint apiKey = Edit(fieldX, y, 372, rowH, IdApiKey, ES_PASSWORD | ES_AUTOHSCROLL);
         Win32.SendMessage(apiKey, EM_LIMITTEXT, 256, 0);
+        // "Paste your API key" is useless advice if you do not already know where the page is.
+        Button(fieldX + 380, y, 80, rowH, IdGetKey, "Get key", isDefault: false);
         y += 32;
 
         Label(labelX, y + 4, labelW, 18, "Model");
@@ -219,15 +229,13 @@ internal sealed unsafe class SettingsWindow
         Edit(fieldX, y, 300, rowH, IdCustomModel, ES_AUTOHSCROLL);
         y += 34;
 
-        Checkbox(fieldX, y, 448, checkH, IdZdr, "Ask for zero-data-retention routing (OpenRouter)");
-        y += 26;
-        Checkbox(fieldX, y, 448, checkH, IdReasoning, "Let the model reason before answering (slower)");
-        y += 26;
-        Checkbox(fieldX, y, 448, checkH, IdRestoreClipboard, "Put my clipboard back after replacing text");
-        y += 26;
-        Checkbox(fieldX, y, 448, checkH, IdNotify, "Show failures as tray notifications");
-        y += 26;
-        Checkbox(fieldX, y, 448, checkH, IdAutostart, "Start TextFix when I sign in");
+        Checkbox(fieldX, y, checkW, checkH, IdZdr, "Ask for zero-data-retention routing (OpenRouter)");
+        y += 24;
+        Checkbox(fieldX, y, checkW, checkH, IdReasoning, "Let the model reason before answering (slower)");
+        y += 30;
+
+        Separator(labelX, y, 596);
+        LabelBold(labelX, y + 8, 200, 18, "Behaviour");
         y += 32;
 
         Label(labelX, y + 4, labelW, 18, "While working");
@@ -235,14 +243,23 @@ internal sealed unsafe class SettingsWindow
         AddString(indicator, "Pulse next to the caret");
         AddString(indicator, "Tray icon only");
         AddString(indicator, "Show nothing");
-        y += 38;
+        y += 34;
+
+        Checkbox(fieldX, y, checkW, checkH, IdRestoreClipboard, "Put my clipboard back after replacing text");
+        y += 24;
+        Checkbox(fieldX, y, checkW, checkH, IdNotify, "Show failures as tray notifications");
+        y += 24;
+        Checkbox(fieldX, y, checkW, checkH, IdAutostart, "Start TextFix when I sign in");
+        y += 30;
 
         y = BuildActionBlock(y, 0, "Action 1");
         y = BuildActionBlock(y, 1, "Action 2");
 
-        Label(labelX, y + 8, 420, 34,
+        // Two lines at this width. It used to be three, and the third was clipped by the label's
+        // own height, which took the point of the sentence with it.
+        Label(labelX, y + 8, 416, 34,
             "Nothing selected fixes the whole field; a selection fixes just the selection." +
-            " F13-F24 make good VIA-mapped hotkeys - nothing else on Windows claims them.");
+            " F13-F24 never collide with an app shortcut.");
 
         Button(438, y + 6, 84, 28, IdOk, "Save", isDefault: true);
         Button(528, y + 6, 84, 28, IdCancel, "Cancel", isDefault: false);
@@ -261,10 +278,12 @@ internal sealed unsafe class SettingsWindow
         Checkbox(326, y, 286, 22, baseId + IdActionWholeOffset, "Whole field when nothing is selected");
         y += 28;
 
-        nint prompt = Edit(16, y, 596, 62, baseId + IdActionPromptOffset,
+        // Three whole lines rather than three and a sliver of a fourth; the scroll bar is what
+        // says there is more, not a half-drawn row of text.
+        nint prompt = Edit(16, y, 596, 54, baseId + IdActionPromptOffset,
             ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS.VSCROLL);
         Win32.SendMessage(prompt, EM_LIMITTEXT, PromptLimit, 0);
-        return y + 72;
+        return y + 64;
     }
 
     private nint Add(int id, nint control)
@@ -602,6 +621,9 @@ internal sealed unsafe class SettingsWindow
                 return;
             case IdApiKey when notification == EN_CHANGE:
                 _apiKeyDirty = true;
+                return;
+            case IdGetKey:
+                Win32.ShellExecute(_hwnd, "open", _provider.KeyPageUrl(), null, null, Win32.SW_SHOWNORMAL);
                 return;
         }
     }

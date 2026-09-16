@@ -1,14 +1,17 @@
 # The single place the supported targets are declared. CI (build.yml) and the release
-# (release.yml) both call this workflow, so adding a platform means adding one entry to the
-# matrix below and nothing else: the RID drives the publish, the archive name and the release
-# asset name all the way through.
+# (release.yml) both call this workflow, so adding a platform means adding one entry to a matrix
+# below and nothing else: the target drives the publish, the archive name and the release asset
+# name all the way through.
+#
+# The two agents are separate programs - the Windows one is C# on direct Win32, the macOS one is
+# Swift on AppKit - so they get a job each rather than one matrix with an unusable shared script.
 name: Build agent
 
 on:
   workflow_call:
 
 jobs:
-  build:
+  windows:
     strategy:
       fail-fast: false
       matrix:
@@ -42,4 +45,45 @@ jobs:
         with:
           name: TextFix-${{ matrix.rid }}
           path: TextFix-${{ matrix.rid }}.zip
+          if-no-files-found: error
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One universal binary rather than two downloads: an Apple Silicon runner cross-compiles
+          # the Intel slice, and the result is still under a megabyte.
+          - target: universal
+            runs-on: macos-14
+
+    name: macos-${{ matrix.target }}
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build and package the agent
+        # The tag drives CFBundleShortVersionString, so a release build is stamped with its own
+        # version and an ordinary CI build is not pretending to be one.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            [0-9]*) ;;
+            *) version="0.0.0" ;;
+          esac
+          ./build-mac.sh --zip --version "$version"
+
+      - name: Report size
+        run: |
+          ls -l TextFix-macos-${{ matrix.target }}.zip
+          lipo -info dist/macos/TextFix.app/Contents/MacOS/TextFix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TextFix-macos-${{ matrix.target }}
+          path: TextFix-macos-${{ matrix.target }}.zip
           if-no-files-found: error

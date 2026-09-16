@@ -4,10 +4,16 @@ bin/
 obj/
 *.zip
 
+# SwiftPM build output (macOS agent)
+.build/
+.swiftpm/
+*.xcodeproj
+
 # Local editor state
 .vs/
 .idea/
 *.user
+.DS_Store
 
 # Never commit a real key or a local config
 config.json

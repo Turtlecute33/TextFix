@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>TextFix</string>
+    <key>CFBundleDisplayName</key>
+    <string>TextFix</string>
+    <key>CFBundleExecutable</key>
+    <string>TextFix</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.turtlecute33.textfix</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>GPL-3.0-only</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!-- The whole point of the menu bar item: TextFix is an agent, not an app you switch to.
+         LSUIElement keeps it out of the Dock and out of Cmd+Tab from the moment it launches,
+         rather than letting an icon flash up before the code can set the activation policy. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- Nothing here is a document type, a URL scheme or a service. The agent's entire external
+         surface is one menu bar item and two global hotkeys. -->
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+</dict>
+</plist>

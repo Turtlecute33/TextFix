@@ -49,6 +49,16 @@ internal static class AiProviderExtensions
         AiProvider.PayPerQ => Endpoints.PayPerQModels,
         _ => Endpoints.OpenRouterKey,
     };
+
+    /// <summary>
+    /// Where the user goes to get a key. Linked from the settings window, because "paste your API
+    /// key" is useless advice if you do not already know where the page is.
+    /// </summary>
+    internal static string KeyPageUrl(this AiProvider provider) => provider switch
+    {
+        AiProvider.PayPerQ => "https://ppq.ai/api-keys",
+        _ => "https://openrouter.ai/keys",
+    };
 }
 
 internal static class Endpoints

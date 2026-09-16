@@ -25,6 +25,30 @@
     <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 
+    <!-- Feature switches for things this agent provably never does. Each one lets the trimmer
+         drop a subsystem whole rather than walking it: no diagnostics pipeline behind HttpClient,
+         no metrics, no reflection-based nullability, no binary serialisation, no startup hooks.
+         StackTraceSupport is deliberately left on - the one place an exception is printed in full
+         is the fatal handler in Program.Main, and a crash report without a stack is not worth the
+         space it saves. -->
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <MetricsSupport>false</MetricsSupport>
+    <NullabilityInfoContextSupport>false</NullabilityInfoContextSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <StartupHookSupport>false</StartupHookSupport>
+    <CustomResourceTypesSupport>false</CustomResourceTypesSupport>
+    <DebuggerSupport>false</DebuggerSupport>
+    <XmlResolverIsNetworkingEnabledByDefault>false</XmlResolverIsNetworkingEnabledByDefault>
+
+    <!-- Identical method bodies are folded into one. Pure size, no behaviour change. -->
+    <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
+
+    <!-- Workstation, non-concurrent GC. The agent allocates a few kilobytes per fix and sits idle
+         the rest of the time, so the background GC thread is a thread and a few hundred kilobytes
+         of committed heap spent on nothing. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\textfix.ico</ApplicationIcon>
   </PropertyGroup>
