@@ -10,7 +10,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>TextFix</AssemblyName>
     <RootNamespace>TextFix</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Product>TextFix for Windows</Product>
     <Company>TextFix</Company>
     <Copyright>GPL-3.0-only</Copyright>

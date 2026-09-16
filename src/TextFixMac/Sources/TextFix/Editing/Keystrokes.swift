@@ -36,11 +36,17 @@ enum Keystrokes {
         CGKeyCode(kVK_Function),
     ]
 
-    /// A private event source so our events carry the state we give them rather than inheriting
-    /// whatever the user's hands are doing. Created once: each source allocates a connection to the
-    /// window server.
+    /// One event source, created once: each one allocates a connection to the window server.
+    ///
+    /// Deliberately the combined session state rather than a private one. A private source would
+    /// isolate our events from the modifiers the user is physically holding, which sounds like
+    /// exactly what this file wants - but `releaseHeldModifiers` asks the *combined* state which
+    /// keys are down, and modifier releases posted from a private source do not answer that
+    /// question. The two would disagree forever, and every chord would pay the settle delay for a
+    /// release that never appeared to take. Using one state for both, and setting the flags on each
+    /// event explicitly, is what the rest of the platform does.
     private static let source: CGEventSource? = {
-        let source = CGEventSource(stateID: .privateState)
+        let source = CGEventSource(stateID: .combinedSessionState)
         // Our synthesised keys must not be swallowed by the suppression interval that follows a
         // real keypress, which is exactly the situation we are in - the user just pressed the
         // hotkey.
