@@ -75,12 +75,19 @@ rm -rf "$(dirname "$iconset")"
 # signed, which is what lets macOS remember the Accessibility permission between launches. It does
 # not get the app past Gatekeeper on another machine - see the README for the one-time
 # right-click > Open, which is the honest cost of shipping without a $99/year account.
+#
+# Both paths get the hardened runtime. It is usually thought of as a notarisation prerequisite, but
+# the protections it turns on are real on their own: no DYLD injection, no unsigned code in the
+# process, no attaching a debugger. For an app the user grants Accessibility to - the most powerful
+# permission on the system - those are worth having whether or not Apple has stamped the bundle.
+# Nothing here needs an entitlement to go with it: Accessibility is gated by TCC, not by the
+# hardened runtime, and the app uses no AppleEvents, no camera and no microphone.
 identity="${MACOS_SIGN_IDENTITY:--}"
 # Written out twice rather than assembled from a flag array: expanding an empty array under
-# `set -u` is an error in the bash macOS ships, and the two commands differ by two flags.
+# `set -u` is an error in the bash macOS ships, and the two commands differ by one flag.
 if [[ "$identity" == "-" ]]; then
     echo "==> Ad-hoc signing"
-    codesign --force --sign - --identifier com.turtlecute33.textfix "$app"
+    codesign --force --sign - --identifier com.turtlecute33.textfix --options runtime "$app"
 else
     echo "==> Signing with $identity"
     codesign --force --sign "$identity" --identifier com.turtlecute33.textfix \

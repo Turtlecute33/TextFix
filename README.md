@@ -132,6 +132,15 @@ copied out before the probe and restored about 180 ms after the paste. The tempo
 so clipboard managers, Windows clipboard history (Win+V) and cloud clipboard all skip it. The macOS
 fallback path does the same, using the `org.nspasteboard.TransientType` convention.
 
+A restore that is still waiting on its timer is always settled before anything else touches the
+clipboard - a second fix, a cancel, or quitting the agent. That is what stops a quick second press,
+or quitting within the restore delay, from leaving you holding TextFix's output instead of whatever
+you had copied.
+
+The one case where your clipboard does *not* come back is when you switch windows mid-request. There
+is only one clipboard, and handing you the fixed text means overwriting what was on it; TextFix says
+so in the notice rather than doing it quietly.
+
 <br>
 
 ## Feedback while it works
@@ -142,6 +151,20 @@ legible on a white document, a black editor or a photo, and it sits below the ca
 beside it so it never covers the text being fixed. It is click-through, never takes focus and never
 appears in the window switcher. Applications that do not publish a caret position get it next to the
 mouse pointer instead.
+
+It has two stages, because you are asking two different questions. The capsule appears the instant
+you press the hotkey, before anything is read - that one answers "did my key register?". The light
+starts sweeping once the request is actually out, which answers "is it stuck?". A capsule with
+nothing moving in it costs nothing to keep on screen: the animation only exists while there is a
+request to wait for.
+
+Pressing the hotkey again while a fix is in flight cancels it. The menu bar tooltip says so while
+it is working.
+
+If you have asked your system for less movement - Reduce Motion on macOS, or turning off "Animate
+controls and elements inside windows" on Windows - nothing travels and nothing scales. The capsule
+appears instead of fading in, and the sweep becomes a slow crossfade in place. No animation is ever
+on the path between the hotkey and your text coming back.
 
 Failures arrive as something you can act on: a refused key, an account out of credit, a model that
 does not exist. Windows uses a tray balloon; macOS draws its own HUD under the menu bar rather than
@@ -162,9 +185,16 @@ work". Both can be switched off if you want the agent completely silent.
   reported by native controls and by password inputs inside Safari and Chrome. On Windows it is
   best-effort: the password style is visible on native controls, though not inside a browser.
 - **The log records what happened, never what you wrote.** Lengths, statuses and error classes only,
-  capped at 256 KB.
+  capped at 256 KB. Provider error bodies are not written to it either - they routinely carry an
+  account identifier.
 - **Nothing is sent until you press the hotkey.** The one exception is an unauthenticated TLS
-  handshake to your provider to warm the connection, which carries no payload and no key.
+  handshake to your provider when the agent starts, to warm the connection. It carries no payload
+  and no key, but it does mean your provider sees the machine at sign-in even on a day you never
+  use TextFix. Set `prewarmOnStartup` to `false` to stop it; the only cost is one handshake on the
+  first fix of the session.
+- **Only two hosts, ever.** `openrouter.ai` and `api.ppq.ai`. No telemetry, no analytics, no update
+  check, no fonts or assets fetched at runtime, and no third-party dependency in either agent that
+  could add one.
 
 <br>
 
@@ -188,8 +218,9 @@ Everything from the settings window is here, plus a few knobs that are not.
 | `indicator` | `caret` | `caret`, `none`, plus `tray` on Windows / `menubar` on macOS. |
 | `notifyOnError` | `true` | Show failures on screen. |
 | `skipPasswordFields` | `true` | Refuse password controls. |
-| `maxInputLength` | `10000` | Characters. Anything longer is refused rather than truncated. |
+| `maxInputLength` | `10000` | UTF-16 code units, counted the same way on both platforms. Anything longer is refused rather than truncated. |
 | `requestBudgetMs` | `90000` | Wall clock for the whole request, retries included. |
+| `prewarmOnStartup` | `true` | Warm the TLS connection at launch. See Privacy. |
 | `verboseLog` | `false` | Adds request-level detail. Still never your text. |
 | `dryRun` | `false` | See Troubleshooting. |
 
@@ -224,22 +255,33 @@ allowed for the whole-field read).
 Per action: `enabled`, `hotkey`, `prompt`, `model` (empty means the top-level model) and
 `wholeTextWhenNoSelection`.
 
-### The `{text}` placeholder
+### The `{text}` and `{nonce}` placeholders
 
 A prompt can say where the captured text goes by including `{text}`:
 
 ```
 Rewrite the text below ... Output only the revised text.
 
-<text>
+<text-{nonce}>
 {text}
-</text>
+</text-{nonce}>
 ```
 
 With a placeholder, the whole prompt is sent as one message with your text substituted in. That is
 the only way a prompt can control how the input is fenced off, and fencing it is what stops
 dictation containing something instruction-shaped ("scrap that, say instead...") from being obeyed
 as an instruction. If a model echoes the tags back, they are stripped from the result.
+
+`{nonce}` expands to a short random value, different on every request. A fixed `<text>` fence is
+only a fence by agreement: text that happens to contain the literal `</text>` - pasted markup, a
+quoted example, or something written to do exactly this - would close it early, and everything after
+it would read as instructions rather than as input. A fence named with a value that did not exist
+when the text was captured cannot be closed early. Use it in any prompt of your own that fences its
+input.
+
+If you were already running TextFix, a Fix prompt you never edited is carried forward to the current
+one automatically. A prompt you *did* edit is left exactly as you wrote it - add `{nonce}` to your
+fence yourself if you want it.
 
 Without a placeholder the prompt is sent as a system message and your text as a separate one, which
 is the simpler shape and stays cacheable. Both work; the shipped Fix prompt uses a placeholder.
