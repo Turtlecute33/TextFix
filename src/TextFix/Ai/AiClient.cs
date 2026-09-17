@@ -276,7 +276,10 @@ internal static class AiClient
         // dictation containing something instruction-shaped from being obeyed. A prompt without a
         // placeholder keeps the other shape: a stable system message, cache breakpoint attached,
         // plus the text as its own message.
-        string? inlined = AiText.Substitute(req.SystemPrompt, userText);
+        //
+        // The nonce is fresh per request, so a prompt fencing its input as <text-{nonce}> gets a
+        // delimiter the captured text cannot close early.
+        string? inlined = AiText.Substitute(req.SystemPrompt, userText, AiText.NewNonce());
 
         var buffer = new System.Buffers.ArrayBufferWriter<byte>(userText.Length + req.SystemPrompt.Length + 512);
         using (var writer = new Utf8JsonWriter(buffer))

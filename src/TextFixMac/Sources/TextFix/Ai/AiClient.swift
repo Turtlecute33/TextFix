@@ -270,7 +270,10 @@ enum AiClient {
         // dictation containing something instruction-shaped from being obeyed. A prompt without a
         // placeholder keeps the other shape: a stable system message, cache breakpoint attached,
         // plus the text as its own message.
-        let inlined = AiText.substitute(req.systemPrompt, userText)
+        //
+        // The nonce is fresh per request, so a prompt fencing its input as <text-{nonce}> gets a
+        // delimiter the captured text cannot close early.
+        let inlined = AiText.substitute(req.systemPrompt, userText, nonce: AiText.newNonce())
 
         var messages: [[String: Any]] = []
         if let inlined {
@@ -362,12 +365,18 @@ enum AiClient {
 
         if let seconds = Int(raw) {
             if seconds < 0 { return -1 }
+            // Clamped *before* the multiply. Swift traps on integer overflow, so a provider
+            // sending an absurd Retry-After would otherwise take the whole agent down - and it
+            // would do it after a capture, taking the user's pending clipboard restore with it.
+            if seconds >= maxRetryAfterMs / 1000 { return maxRetryAfterMs }
             return min(seconds * 1000, maxRetryAfterMs)
         }
         if let when = httpDateFormatter.date(from: raw) {
-            let ms = Int(when.timeIntervalSinceNow * 1000)
+            // Same reason, one conversion later: Double -> Int also traps out of range.
+            let ms = when.timeIntervalSinceNow * 1000
             if ms <= 0 { return -1 }
-            return min(ms, maxRetryAfterMs)
+            if ms >= Double(maxRetryAfterMs) { return maxRetryAfterMs }
+            return Int(ms)
         }
         return -1
     }

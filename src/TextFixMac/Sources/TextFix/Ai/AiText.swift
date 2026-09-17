@@ -8,6 +8,20 @@ struct AiError: Error {
     var errorBody: String = ""
 }
 
+/// Without this, interpolating an AiError reflects every stored property - including `errorBody`,
+/// which is the provider's raw reply. Those bodies routinely carry an account or organisation
+/// identifier, and one `Log.warn("\(error)")` is all it takes to put it on disk. The body is kept
+/// because the routing rules have to read it; it is simply never the thing that gets printed.
+extension AiError: CustomStringConvertible {
+    var description: String {
+        statusCode > 0 ? "\(message) (HTTP \(statusCode))" : message
+    }
+}
+
+extension AiError: LocalizedError {
+    var errorDescription: String? { description }
+}
+
 enum AiStatus {
     /// "HTTP 200 with a body we cannot use" - unparseable JSON, an {"error": ...} envelope served
     /// with a 200 (PayPerQ does this when its upstream fails), no choices, or an assistant message
@@ -32,23 +46,54 @@ enum AiText {
             out.append(scalar)
         }
         let cleaned = String(out).trimmingCharacters(in: .whitespacesAndNewlines)
-        // Swift counts Characters as grapheme clusters, so truncating here can never split a
-        // surrogate pair, a ZWJ emoji sequence or a base plus combining mark.
-        if cleaned.count <= maxLength { return cleaned }
-        return String(cleaned.prefix(maxLength))
+        // Measured in UTF-16 code units, which is what the Windows agent's string length is, so
+        // one maxOutputLength in config.json means the same thing on both platforms.
+        if cleaned.utf16.count <= maxLength { return cleaned }
+
+        // Cut on a grapheme cluster boundary so we never split a surrogate pair, a ZWJ emoji
+        // sequence or a base plus combining mark.
+        var end = cleaned.startIndex
+        var used = 0
+        for character in cleaned {
+            let width = character.utf16.count
+            if used + width > maxLength { break }
+            used += width
+            end = cleaned.index(after: end)
+        }
+        return String(cleaned[..<end])
     }
 
     /// Recognised placeholders for the captured text inside a prompt. {text} is the documented
     /// one; the other spellings are accepted because they are what people naturally type.
     private static let placeholders = ["{text}", "{paste here}", "{paste}"]
 
+    /// The token a prompt uses to ask for the per-request fence nonce.
+    private static let nonceToken = "{nonce}"
+
+    /// A value the captured text cannot contain, because it did not exist when the text was
+    /// captured.
+    ///
+    /// A prompt that fences its input in a fixed tag is only fencing it by convention: text that
+    /// happens to contain the closing tag - pasted markup, a quoted example, or something written
+    /// to do exactly this - closes the fence early and everything after it reads as prompt rather
+    /// than as input. Naming the fence with a fresh nonce on every request makes the boundary
+    /// something the input cannot forge.
+    static func newNonce() -> String {
+        String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+    }
+
     /// Substitutes the captured text into a prompt that asks for it by placeholder, or returns nil
     /// when the prompt has no placeholder. A prompt with one describes the entire request -
     /// including how the input is delimited - so the caller sends it as a single message instead
     /// of a system prompt plus a separate text message.
-    static func substitute(_ prompt: String, _ text: String) -> String? {
+    ///
+    /// The nonce is expanded into the prompt first and the text second, so a captured text that
+    /// itself contains "{nonce}" is left alone rather than being handed the real value.
+    static func substitute(_ prompt: String, _ text: String, nonce: String) -> String? {
         for token in placeholders where prompt.range(of: token, options: .caseInsensitive) != nil {
-            return prompt.replacingOccurrences(of: token, with: text, options: .caseInsensitive)
+            let fenced = prompt.replacingOccurrences(
+                of: nonceToken, with: nonce, options: .caseInsensitive)
+            return fenced.replacingOccurrences(of: token, with: text, options: .caseInsensitive)
         }
         return nil
     }
@@ -60,8 +105,11 @@ enum AiText {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 7, text.first == "<" else { return raw }
         guard let close = text.firstIndex(of: ">") else { return raw }
+        // Digits and hyphens are allowed after the first letter so a nonce-named fence
+        // (<text-a3f9c1b2>) is recognised the same way a plain <text> is.
         let name = text[text.index(after: text.startIndex)..<close]
-        guard !name.isEmpty, name.allSatisfy({ $0.isASCII && $0.isLetter }) else { return raw }
+        guard let first = name.first, first.isASCII, first.isLetter else { return raw }
+        guard name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else { return raw }
         let closingTag = "</\(name)>"
         guard text.lowercased().hasSuffix(closingTag.lowercased()) else { return raw }
         let body = text[text.index(after: close)..<text.index(text.endIndex, offsetBy: -closingTag.count)]

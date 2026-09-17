@@ -72,19 +72,38 @@ internal static class AiText
     /// </summary>
     private static readonly string[] Placeholders = ["{text}", "{paste here}", "{paste}"];
 
+    /// <summary>The token a prompt uses to ask for the per-request fence nonce.</summary>
+    private const string NonceToken = "{nonce}";
+
+    /// <summary>
+    /// A value the captured text cannot contain, because it did not exist when the text was
+    /// captured.
+    ///
+    /// A prompt that fences its input in a fixed tag is only fencing it by convention: text that
+    /// happens to contain the closing tag - pasted HTML, a quoted example, or something written
+    /// to do exactly this - closes the fence early and everything after it reads as prompt rather
+    /// than as input. Naming the fence with a fresh nonce on every request makes the boundary
+    /// something the input cannot forge.
+    /// </summary>
+    internal static string NewNonce() => Guid.NewGuid().ToString("N")[..8];
+
     /// <summary>
     /// Substitutes the captured text into a prompt that asks for it by placeholder, or returns
     /// null when the prompt has no placeholder. A prompt with one describes the entire request -
     /// including how the input is delimited - so the caller sends it as a single message instead
     /// of a system prompt plus a separate text message.
+    ///
+    /// The nonce is expanded into the prompt first and the text second, so a captured text that
+    /// itself contains "{nonce}" is left alone rather than being handed the real value.
     /// </summary>
-    internal static string? Substitute(string prompt, string text)
+    internal static string? Substitute(string prompt, string text, string nonce)
     {
         foreach (string token in Placeholders)
         {
             if (prompt.Contains(token, StringComparison.OrdinalIgnoreCase))
             {
-                return prompt.Replace(token, text, StringComparison.OrdinalIgnoreCase);
+                string fenced = prompt.Replace(NonceToken, nonce, StringComparison.OrdinalIgnoreCase);
+                return fenced.Replace(token, text, StringComparison.OrdinalIgnoreCase);
             }
         }
         return null;
@@ -102,10 +121,13 @@ internal static class AiText
         int close = text.IndexOf('>');
         if (close < 2) return raw;
 
+        // Digits and hyphens are allowed after the first letter so a nonce-named fence
+        // (<text-a3f9c1b2>) is recognised the same way a plain <text> is.
         string name = text[1..close];
+        if (!char.IsAsciiLetter(name[0])) return raw;
         foreach (char c in name)
         {
-            if (!char.IsAsciiLetter(c)) return raw;
+            if (!char.IsAsciiLetterOrDigit(c) && c != '-') return raw;
         }
         string closingTag = "</" + name + ">";
         if (!text.EndsWith(closingTag, StringComparison.OrdinalIgnoreCase)) return raw;
