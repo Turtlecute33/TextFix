@@ -1,6 +1,49 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import AppKit
 
+/// The one motion rule the whole app shares.
+///
+/// Everything TextFix animates is incidental - an indicator arriving, a notice fading - so all of
+/// it is safe to simply not do. Nothing on the path between the hotkey and the text landing waits
+/// on an animation, which is the property that has to stay true however the visuals change.
+enum Motion {
+    /// True when the user has asked macOS for less movement. Read fresh rather than cached: it can
+    /// be toggled while the agent is resident, and the cost is one property read per fix.
+    static var reduced: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// Enter: 140 ms on an emphasised decelerate, so it settles rather than stops.
+    static let enterDuration: TimeInterval = 0.14
+    /// Exit: quicker than the entrance, because nobody is waiting to watch something leave.
+    static let exitDuration: TimeInterval = 0.11
+    /// One pass of the indeterminate sweep.
+    static let sweepPeriod: CFTimeInterval = 1.15
+    /// The reduced-motion substitute: a slow crossfade in place, nothing travelling.
+    static let reducedPulsePeriod: CFTimeInterval = 1.5
+
+    /// Runs `body` in an animation group, or applies it instantly under reduced motion.
+    static func animate(
+        duration: TimeInterval,
+        timing: CAMediaTimingFunctionName,
+        _ body: @escaping (NSAnimationContext) -> Void,
+        completion: (() -> Void)? = nil
+    ) {
+        guard !reduced else {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0
+                body(context)
+            }, completionHandler: completion)
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: timing)
+            body(context)
+        }, completionHandler: completion)
+    }
+}
+
 /// Small factory helpers for the hand-built AppKit UI. They exist so the settings window reads as
 /// a description of the form rather than as three hundred lines of `translatesAutoresizing...`.
 enum Controls {

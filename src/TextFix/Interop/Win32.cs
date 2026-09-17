@@ -147,6 +147,10 @@ internal static unsafe partial class Win32
     internal static partial bool AdjustWindowRectExForDpi(
         ref RECT lpRect, uint dwStyle, [MarshalAs(UnmanagedType.Bool)] bool bMenu, uint dwExStyle, uint dpi);
 
+    [LibraryImport(User32, EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SystemParametersInfo(uint uiAction, uint uiParam, void* pvParam, uint fWinIni);
+
     [LibraryImport(User32, EntryPoint = "GetSysColor")]
     internal static partial uint GetSysColor(int nIndex);
 
@@ -338,6 +342,13 @@ internal static unsafe partial class Win32
     internal const int SM_YVIRTUALSCREEN = 77;
     internal const int SM_CXVIRTUALSCREEN = 78;
     internal const int SM_CYVIRTUALSCREEN = 79;
+
+    /// <summary>
+    /// "Animate controls and elements inside windows" in Ease of Access. This is what Windows
+    /// offers in place of the reduced-motion setting every other platform has, and it is off for
+    /// exactly the people who should not be shown a light travelling across their screen.
+    /// </summary>
+    internal const uint SPI_GETCLIENTAREAANIMATION = 0x1042;
 
     internal const int COLOR_BTNFACE = 15;
     internal const int COLOR_WINDOW = 5;

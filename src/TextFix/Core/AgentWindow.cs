@@ -54,6 +54,9 @@ internal sealed unsafe class AgentWindow
         _taskbarCreatedMessage = Win32.RegisterWindowMessage("TaskbarCreated");
 
         ApplyConfig();
+        // The Run key stores an absolute path, so moving or reinstalling the exe silently breaks
+        // run-at-login. config.json remembers what the user actually asked for, so put it back.
+        Autostart.Reconcile(_config.StartWithWindows);
         Log.Info("Agent started");
 
         if (_config.WasCreatedFresh)
@@ -62,9 +65,10 @@ internal sealed unsafe class AgentWindow
             // waiting for the user to press a hotkey and get an error.
             OpenSettings();
         }
-        else if (SecretStore.HasApiKey(_config.ProviderValue))
+        else if (_config.PrewarmOnStartup && SecretStore.HasApiKey(_config.ProviderValue))
         {
             // Warms the TLS session so the first fix of the session is as fast as the second.
+            // Opt-out, because it is the one thing the agent does without being asked.
             AiClient.Prewarm(_config.ProviderValue);
         }
 
@@ -75,6 +79,9 @@ internal sealed unsafe class AgentWindow
         _fix?.Dispose();
         _tray?.Dispose();
         Log.Info("Agent stopped");
+        // The log is written on its own thread, so the last few lines need somewhere to land
+        // before the process goes away.
+        Log.Flush();
         return result;
     }
 
@@ -188,6 +195,11 @@ internal sealed unsafe class AgentWindow
                 return 0;
 
             case WM.DESTROY:
+                // A clipboard restore still on the timer has to happen here, before the queue is
+                // torn down. GetMessage retrieves WM_QUIT well ahead of WM_TIMER, so a quit inside
+                // the restore delay would drop the restore and leave the user holding our output
+                // instead of whatever they had copied.
+                _fix?.FlushPendingRestore();
                 Win32.PostQuitMessage(0);
                 return 0;
         }

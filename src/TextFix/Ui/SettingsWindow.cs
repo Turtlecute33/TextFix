@@ -48,6 +48,7 @@ internal sealed unsafe class SettingsWindow
     private const uint CB_SETCURSEL = 0x014E;
     private const uint CB_GETCURSEL = 0x0147;
     private const uint EM_LIMITTEXT = 0x00C5;
+    private const uint EM_SETCUEBANNER = 0x1501;
     private const uint HKM_SETHOTKEY = 0x0401;
     private const uint HKM_GETHOTKEY = 0x0402;
 
@@ -185,9 +186,18 @@ internal sealed unsafe class SettingsWindow
                 hCursor = Win32.LoadCursor(0, 32512 /* IDC_ARROW */),
                 hIcon = NativeUi.LoadAppIcon(32),
             };
-            Win32.RegisterClassEx(&windowClass);
+            if (Win32.RegisterClassEx(&windowClass) != 0)
+            {
+                _classRegistered = true;
+                return;
+            }
         }
-        _classRegistered = true;
+        // Already registered is the one failure that means success. Anything else has to stay
+        // un-flagged, or a transient failure would leave the window permanently unopenable.
+        const int ErrorClassAlreadyExists = 1410;
+        int error = Marshal.GetLastWin32Error();
+        if (error == ErrorClassAlreadyExists) _classRegistered = true;
+        else Log.Warn("Could not register the settings window class (error " + error + ")");
     }
 
     // ---- layout ----
@@ -217,6 +227,7 @@ internal sealed unsafe class SettingsWindow
         Label(labelX, y + 4, labelW, 18, "API key");
         nint apiKey = Edit(fieldX, y, 372, rowH, IdApiKey, ES_PASSWORD | ES_AUTOHSCROLL);
         Win32.SendMessage(apiKey, EM_LIMITTEXT, 256, 0);
+        if (apiKey != 0) Win32.SendMessageString(apiKey, EM_SETCUEBANNER, 1, "Paste your API key");
         // "Paste your API key" is useless advice if you do not already know where the page is.
         Button(fieldX + 380, y, 80, rowH, IdGetKey, "Get key", isDefault: false);
         y += 32;
@@ -497,8 +508,29 @@ internal sealed unsafe class SettingsWindow
         // so it never passes through config.json.
         if (_apiKeyDirty)
         {
-            string typed = GetText(IdApiKey);
-            if (typed != KeyPlaceholder) SecretStore.SetApiKey(_provider, typed);
+            string typed = GetText(IdApiKey).Trim();
+            if (typed == KeyPlaceholder)
+            {
+                // Untouched.
+            }
+            else if (typed.Length == 0)
+            {
+                SecretStore.SetApiKey(_provider, string.Empty); // an emptied field removes the key
+            }
+            else if (!LooksLikeApiKey(typed))
+            {
+                // A field holding a working key, focused, is one stray keystroke away from being
+                // saved as that keystroke. Nothing that short is a key, so say so rather than
+                // silently replacing a key that worked with one that cannot.
+                Complain(
+                    "That does not look like an API key. Paste the whole key, or clear the field"
+                    + " to remove the one you have.");
+                return false;
+            }
+            else
+            {
+                SecretStore.SetApiKey(_provider, typed);
+            }
         }
         Autostart.SetEnabled(GetCheck(IdAutostart));
         result.StartWithWindows = GetCheck(IdAutostart);
@@ -510,6 +542,14 @@ internal sealed unsafe class SettingsWindow
     /// only keys worth claiming globally without a modifier.
     /// </summary>
     private static bool IsSafeUnmodifiedKey(uint vk) => vk is >= 0x7C and <= 0x87;
+
+    /// <summary>
+    /// Deliberately a shape check, not a format check: both providers issue keys in their own
+    /// shapes and a third could change tomorrow. All this has to catch is the accident - a field
+    /// that was showing a saved key and now holds one or two characters.
+    /// </summary>
+    private static bool LooksLikeApiKey(string value) =>
+        value.Length >= 16 && value.AsSpan().IndexOfAny(" \t\r\n") < 0;
 
     private void Complain(string message) =>
         Win32.MessageBox(_hwnd, message, "TextFix settings", Win32.MB_ICONWARNING);

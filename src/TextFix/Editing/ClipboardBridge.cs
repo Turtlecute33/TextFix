@@ -68,8 +68,17 @@ internal static unsafe class ClipboardBridge
         return false;
     }
 
-    internal static string? GetText(nint owner)
+    /// <summary>
+    /// Reads the clipboard's text, materialising at most <paramref name="maxChars"/> of it.
+    ///
+    /// The cap matters because this runs on the message thread and the clipboard can hold
+    /// hundreds of megabytes. Callers pass one character more than they are willing to accept, so
+    /// an oversized clipboard comes back one character over the limit and is rejected by the
+    /// length check that already exists - without the whole payload ever becoming a string.
+    /// </summary>
+    internal static string? GetText(nint owner, int maxChars = int.MaxValue)
     {
+        if (maxChars <= 0) return null;
         if (!Win32.IsClipboardFormatAvailable(Win32.CF_UNICODETEXT)) return null;
         if (!TryOpen(owner)) return null;
         try
@@ -82,8 +91,10 @@ internal static unsafe class ClipboardBridge
             {
                 nuint bytes = Win32.GlobalSize(handle);
                 if (bytes == 0) return null;
-                int maxChars = (int)Math.Min(bytes / sizeof(char), int.MaxValue);
-                var span = new ReadOnlySpan<char>((char*)pointer, maxChars);
+                long available = (long)(bytes / sizeof(char));
+                int take = (int)Math.Min(available, maxChars);
+                if (take <= 0) return null;
+                var span = new ReadOnlySpan<char>((char*)pointer, take);
                 int end = span.IndexOf('\0');
                 return end < 0 ? new string(span) : new string(span[..end]);
             }
@@ -316,17 +327,20 @@ internal static unsafe class ClipboardBridge
     /// the host copied. The sequence number is still used, but only to avoid reading the clipboard
     /// in a tight loop.
     /// </summary>
-    internal static string? WaitForCopy(string marker, uint baseline, int timeoutMs, nint owner)
+    internal static string? WaitForCopy(string marker, uint baseline, int timeoutMs, nint owner, int maxChars)
     {
         long deadline = Environment.TickCount64 + timeoutMs;
         uint lastSeen = baseline;
+        // The marker has to survive the cap intact or "is the marker still there" stops being
+        // decidable, so read at least far enough to recognise it.
+        int readLimit = Math.Max(maxChars, marker.Length + 1);
         while (true)
         {
             uint current = Win32.GetClipboardSequenceNumber();
             if (current != lastSeen)
             {
                 lastSeen = current;
-                string? text = GetText(owner);
+                string? text = GetText(owner, readLimit);
                 if (text != null && text.Length > 0 && !string.Equals(text, marker, StringComparison.Ordinal))
                 {
                     return text;

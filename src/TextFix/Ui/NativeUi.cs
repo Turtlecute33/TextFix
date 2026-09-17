@@ -21,6 +21,18 @@ internal static unsafe class NativeUi
 
     internal static int Scale(int value, uint dpi) => (int)Math.Round(value * dpi / 96.0);
 
+    /// <summary>
+    /// False when the user has turned off "Animate controls and elements inside windows", which is
+    /// the Windows spelling of reduce-motion. Read fresh rather than cached: it can change while
+    /// the agent is resident, and the cost is one call per fix.
+    /// </summary>
+    internal static bool AnimationsEnabled()
+    {
+        int enabled = 1;
+        if (!Win32.SystemParametersInfo(Win32.SPI_GETCLIENTAREAANIMATION, 0, &enabled, 0)) return true;
+        return enabled != 0;
+    }
+
     internal static uint DpiFor(nint hwnd)
     {
         uint dpi = hwnd == 0 ? 0 : Win32.GetDpiForWindow(hwnd);

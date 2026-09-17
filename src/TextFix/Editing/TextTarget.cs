@@ -32,12 +32,18 @@ internal enum ReplaceOutcome
     Failed,
 }
 
+/// <param name="MaxChars">
+/// The most text worth reading off the clipboard, in UTF-16 code units. One more than the caller's
+/// limit, so an oversized read is recognisably over it without being materialised in full on the
+/// message thread.
+/// </param>
 internal sealed record CaptureOptions(
     bool AllowSelectAll,
     bool SkipPasswordFields,
     bool TakeSnapshot,
     int SelectionProbeMs,
-    int CopyTimeoutMs);
+    int CopyTimeoutMs,
+    int MaxChars);
 
 /// <summary>
 /// Reads the text under the caret out of whatever app has focus, and writes the fixed version
@@ -119,7 +125,11 @@ internal static unsafe class TextTarget
         string Cleanup(string message)
         {
             if (saved != null) ClipboardBridge.RestoreOrClear(saved, owner);
-            else if (probeMarker != null && ClipboardBridge.GetText(owner) == probeMarker) ClipboardBridge.Clear(owner);
+            else if (probeMarker != null
+                && ClipboardBridge.GetText(owner, probeMarker.Length + 1) == probeMarker)
+            {
+                ClipboardBridge.Clear(owner);
+            }
             return message;
         }
 
@@ -144,7 +154,8 @@ internal static unsafe class TextTarget
         }
 
         CaptureMode mode = CaptureMode.Selection;
-        string? text = ClipboardBridge.WaitForCopy(probeMarker, baseline, options.SelectionProbeMs, owner);
+        string? text = ClipboardBridge.WaitForCopy(
+            probeMarker, baseline, options.SelectionProbeMs, owner, options.MaxChars);
         Log.Debug("Selection probe: " + (text == null ? "nothing selected" : text.Length + " characters"));
 
         if (string.IsNullOrWhiteSpace(text))
@@ -168,7 +179,8 @@ internal static unsafe class TextTarget
                 if (!ClipboardBridge.SetText(probeMarker, owner, transient: true)) return null;
                 uint mark = ClipboardBridge.SequenceNumber();
                 if (!Keystrokes.SendCtrlChord(VK.KEY_C, chordDelayMs)) return null;
-                return ClipboardBridge.WaitForCopy(probeMarker, mark, options.CopyTimeoutMs, owner);
+                return ClipboardBridge.WaitForCopy(
+                    probeMarker, mark, options.CopyTimeoutMs, owner, options.MaxChars);
             }
 
             text = ReadWholeField(Keystrokes.ChordSettleMs, null);

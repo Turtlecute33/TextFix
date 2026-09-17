@@ -60,8 +60,11 @@ final class StatusItem: NSObject, NSMenuDelegate {
             guard layer.animation(forKey: "working") == nil else { return }
             let pulse = CABasicAnimation(keyPath: "opacity")
             pulse.fromValue = 1.0
-            pulse.toValue = 0.35
-            pulse.duration = 0.62
+            // Under Reduce Motion this stays a crossfade - nothing here ever moves - but a slower,
+            // shallower one: an indefinite flash in the menu bar is exactly what that setting is
+            // meant to spare people.
+            pulse.toValue = Motion.reduced ? 0.6 : 0.35
+            pulse.duration = Motion.reduced ? Motion.reducedPulsePeriod / 2 : 0.62
             pulse.autoreverses = true
             pulse.repeatCount = .infinity
             pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)

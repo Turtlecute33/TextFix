@@ -11,16 +11,28 @@ namespace TextFix.Ui;
 /// light sweeping through it. Every AI action has a network wait in the middle of it, and one
 /// moving thing is the difference between "it is working" and "it is stuck".
 ///
+/// It has two stages, because the user asks two different questions at two different moments. The
+/// quiet stage - a plain capsule, no sweep - goes up the instant the hotkey is pressed and answers
+/// "did my key register?", which matters because the capture that follows can spend the better part
+/// of a second in clipboard round trips. The sweeping stage answers "is it stuck?" once the request
+/// is actually out. A static capsule costs nothing to keep on screen: the frame timer stops until
+/// something promotes or hides it.
+///
 /// It is drawn rather than composed of controls because it has to be legible on an unknown
 /// background - a white document, a black editor, a photo - so it brings its own contrast: a dark
 /// capsule with a soft drop shadow and a hairline rim, and a bright indeterminate sweep inside it.
 /// It fades and scales in and out instead of blinking into existence.
 ///
+/// Under reduced motion (Ease of Access &gt; "Animate controls and elements inside windows" off)
+/// nothing travels and nothing scales: the capsule appears at full opacity and the sweep is
+/// replaced by a slow crossfade in place, which still reads as "alive" without putting a moving
+/// light on the screen of somebody who asked not to have one.
+///
 /// The window is layered, click-through, non-activating and marked as a tool window, so it cannot
 /// take focus, appear in Alt+Tab, or intercept a click. It lives on its own thread with its own
 /// message loop, so the animation stays smooth while the main thread is blocked in a clipboard
 /// round trip, and the whole thing costs one timer over a surface of a few thousand pixels while
-/// visible and nothing at all when hidden.
+/// sweeping and nothing at all otherwise.
 /// </summary>
 internal static unsafe class CaretPulse
 {
@@ -31,7 +43,12 @@ internal static unsafe class CaretPulse
     // read as smooth rather than as a stutter.
     private const int FrameIntervalMs = 16;
 
+    // 10 fps is plenty for a 1.5 s crossfade, and it is the difference between a reduced-motion
+    // indicator that costs nothing and one that costs the same as the animated one.
+    private const int ReducedFrameIntervalMs = 100;
+
     private const int SweepPeriodMs = 1150;
+    private const int ReducedSweepPeriodMs = 1500;
     private const int FadeInMs = 150;
     private const int FadeOutMs = 130;
 
@@ -68,12 +85,18 @@ internal static unsafe class CaretPulse
     private static int _requestedX;
     private static int _requestedY;
     private static bool _classRegistered;
+    private static volatile bool _sweeping;
+    private static volatile bool _reducedMotion;
 
     /// <summary>
-    /// Positions the indicator for the given caret rectangle and starts it. Called from the agent
-    /// thread; all the window work happens on the indicator thread.
+    /// Positions the indicator for the given caret rectangle and starts it, or promotes one that is
+    /// already up. Called from the agent thread; all the window work happens on the indicator
+    /// thread.
     /// </summary>
-    internal static void Show(RECT caret, nint foreground)
+    /// <param name="sweeping">
+    /// False for the quiet stage shown during the capture, true once the request is in flight.
+    /// </param>
+    internal static void Show(RECT caret, nint foreground, bool sweeping)
     {
         try
         {
@@ -107,6 +130,8 @@ internal static unsafe class CaretPulse
             }
             NativeUi.ClampToScreen(ref x, ref y, width, height);
 
+            _sweeping = sweeping;
+            _reducedMotion = !NativeUi.AnimationsEnabled();
             lock (Gate)
             {
                 _requestedX = x;
@@ -159,7 +184,7 @@ internal static unsafe class CaretPulse
     {
         try
         {
-            RegisterClass();
+            if (!RegisterClass()) return;
             _hwnd = Win32.CreateWindowEx(
                 WS.EX_LAYERED | WS.EX_TRANSPARENT | WS.EX_TOOLWINDOW | WS.EX_NOACTIVATE | WS.EX_TOPMOST,
                 ClassName, null, WS.POPUP,
@@ -183,9 +208,9 @@ internal static unsafe class CaretPulse
         ReleaseSurface();
     }
 
-    private static void RegisterClass()
+    private static bool RegisterClass()
     {
-        if (_classRegistered) return;
+        if (_classRegistered) return true;
         fixed (char* className = ClassName)
         {
             var windowClass = new WNDCLASSEXW
@@ -195,9 +220,22 @@ internal static unsafe class CaretPulse
                 hInstance = NativeUi.Instance,
                 lpszClassName = className,
             };
-            Win32.RegisterClassEx(&windowClass);
+            if (Win32.RegisterClassEx(&windowClass) != 0)
+            {
+                _classRegistered = true;
+                return true;
+            }
         }
-        _classRegistered = true;
+        // A class that is already registered is the one failure that means success. Anything else
+        // must stay un-flagged so the next attempt retries rather than assuming a class exists.
+        const int ErrorClassAlreadyExists = 1410;
+        if (Marshal.GetLastWin32Error() == ErrorClassAlreadyExists)
+        {
+            _classRegistered = true;
+            return true;
+        }
+        Log.Warn("Could not register the indicator window class (error " + Marshal.GetLastWin32Error() + ")");
+        return false;
     }
 
     [UnmanagedCallersOnly]
@@ -215,6 +253,7 @@ internal static unsafe class CaretPulse
                 {
                     _phase = Phase.Out;
                     _fadeOutAtTicks = Environment.TickCount64;
+                    Win32.SetTimer(hwnd, TimerId, FrameIntervalMs, 0);
                 }
                 return 0;
 
@@ -251,13 +290,20 @@ internal static unsafe class CaretPulse
         EnsureSurface(width, height);
         if (_pixels == null) return;
 
-        // A show during a fade-out restarts the entrance rather than resuming a half-faded pill.
-        _shownAtTicks = Environment.TickCount64;
-        _phase = Phase.In;
         Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, x, y, width, height, Win32.SWP_NOACTIVATE);
-        Win32.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
+        if (_phase is Phase.Hidden or Phase.Out)
+        {
+            // A show while hidden - or during a fade-out - starts the entrance rather than
+            // resuming a half-faded pill. A show while it is already up is a reposition or a
+            // promotion, and must not make it fade in a second time.
+            _shownAtTicks = Environment.TickCount64;
+            _phase = Phase.In;
+            Win32.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
+        }
         Paint(hwnd);
-        Win32.SetTimer(hwnd, TimerId, FrameIntervalMs, 0);
+        // Cast because the ternary is not a constant expression, so it will not widen to uint on
+        // its own the way the bare constant above does.
+        Win32.SetTimer(hwnd, TimerId, (uint)(_reducedMotion ? ReducedFrameIntervalMs : FrameIntervalMs), 0);
     }
 
     private static void EnsureSurface(int width, int height)
@@ -314,20 +360,31 @@ internal static unsafe class CaretPulse
         if (_pixels == null || _memoryDc == 0) return;
 
         long now = Environment.TickCount64;
+        bool reduced = _reducedMotion;
+        // Reduced motion gets no entrance: it appears, rather than arriving.
+        int fadeIn = reduced ? 1 : FadeInMs;
+        int fadeOut = reduced ? 1 : FadeOutMs;
 
         // Entrance and exit: opacity plus a small scale, which is what makes it read as arriving
         // rather than blinking on.
         float opacity = 1f;
+        bool settled = false;
         switch (_phase)
         {
             case Phase.In:
-                float inProgress = Math.Clamp((now - _shownAtTicks) / (float)FadeInMs, 0f, 1f);
+                float inProgress = Math.Clamp((now - _shownAtTicks) / (float)fadeIn, 0f, 1f);
                 opacity = EaseOut(inProgress);
                 if (inProgress >= 1f) _phase = Phase.Loop;
                 break;
 
+            case Phase.Loop:
+                // A capsule that is up but not sweeping has nothing left to animate. Draw this
+                // frame and stop the timer; promoting it posts PULSE_SHOW, which starts it again.
+                settled = !_sweeping;
+                break;
+
             case Phase.Out:
-                float outProgress = Math.Clamp((now - _fadeOutAtTicks) / (float)FadeOutMs, 0f, 1f);
+                float outProgress = Math.Clamp((now - _fadeOutAtTicks) / (float)fadeOut, 0f, 1f);
                 opacity = 1f - EaseOut(outProgress);
                 if (outProgress >= 1f)
                 {
@@ -343,9 +400,9 @@ internal static unsafe class CaretPulse
                 return;
         }
 
-        // 0.94 -> 1.0 on entry, and back down on exit.
-        float scale = 0.94f + 0.06f * opacity;
-        Render(now, opacity, scale);
+        // 0.94 -> 1.0 on entry, and back down on exit. Nothing scales under reduced motion.
+        float scale = reduced ? 1f : 0.94f + 0.06f * opacity;
+        Render(now, opacity, scale, reduced);
 
         var size = new SIZE { cx = _width, cy = _height };
         var source = new POINT { X = 0, Y = 0 };
@@ -359,6 +416,8 @@ internal static unsafe class CaretPulse
         Win32.GetWindowRect(hwnd, out RECT bounds);
         var destination = new POINT { X = bounds.Left, Y = bounds.Top };
         Win32.UpdateLayeredWindow(hwnd, 0, &destination, &size, _memoryDc, &source, 0, &blend, Win32.ULW_ALPHA);
+
+        if (settled) Win32.KillTimer(hwnd, TimerId);
     }
 
     /// <summary>
@@ -366,7 +425,7 @@ internal static unsafe class CaretPulse
     /// the capsule, which gives antialiased edges, a soft shadow and a hairline rim from the same
     /// number without any clipping regions or extra bitmaps.
     /// </summary>
-    private static void Render(long now, float opacity, float scale)
+    private static void Render(long now, float opacity, float scale, bool reduced)
     {
         new Span<uint>(_pixels, _width * _height).Clear();
 
@@ -378,18 +437,34 @@ internal static unsafe class CaretPulse
         float shadowSpread = NativeUi.Scale(Margin, _dpi) * 0.9f;
         float shadowDrop = NativeUi.Scale(2, _dpi);
 
-        // Sweep position: one pass left to right per period, entering and leaving beyond the ends
-        // so the bright segment appears to travel through the capsule rather than bounce inside it.
-        float phase = (now % SweepPeriodMs) / (float)SweepPeriodMs;
-        float travel = EaseInOut(phase);
+        bool sweeping = _sweeping;
         float sweepHalfWidth = halfWidth * 0.34f;
-        // Overshoot is exactly one segment half-width at each end: enough for the light to enter
-        // and leave through the rim, but not so much that the capsule sits empty for part of the
-        // cycle - which is what a wider overshoot looked like, and it read as broken rather than
-        // as working.
-        float sweepCentreX = centreX + (halfWidth + sweepHalfWidth) * (travel * 2f - 1f);
-        // Fade the segment at both ends of its run, so it never pops in or out at the rim.
-        float sweepFade = MathF.Min(1f, MathF.Sin(phase * MathF.PI) * 1.8f);
+        float sweepCentreX;
+        float sweepFade;
+        if (reduced)
+        {
+            // Nothing travels: the segment sits in the middle and breathes. A crossfade in place
+            // is the substitution Apple and Microsoft both make for a moving indicator, and it
+            // answers the same question without anything crossing the screen.
+            sweepCentreX = centreX;
+            float cycle = (now % ReducedSweepPeriodMs) / (float)ReducedSweepPeriodMs;
+            sweepFade = 0.30f + 0.50f * (0.5f - 0.5f * MathF.Cos(cycle * MathF.PI * 2f));
+        }
+        else
+        {
+            // Sweep position: one pass left to right per period, entering and leaving beyond the
+            // ends so the bright segment appears to travel through the capsule rather than bounce
+            // inside it.
+            float phase = (now % SweepPeriodMs) / (float)SweepPeriodMs;
+            float travel = EaseInOut(phase);
+            // Overshoot is exactly one segment half-width at each end: enough for the light to
+            // enter and leave through the rim, but not so much that the capsule sits empty for
+            // part of the cycle - which is what a wider overshoot looked like, and it read as
+            // broken rather than as working.
+            sweepCentreX = centreX + (halfWidth + sweepHalfWidth) * (travel * 2f - 1f);
+            // Fade the segment at both ends of its run, so it never pops in or out at the rim.
+            sweepFade = MathF.Min(1f, MathF.Sin(phase * MathF.PI) * 1.8f);
+        }
 
         for (int y = 0; y < _height; y++)
         {
@@ -417,8 +492,10 @@ internal static unsafe class CaretPulse
                 }
 
                 // Sweep, kept a pixel inside the body so the rim stays dark all the way round.
+                // Absent entirely in the quiet stage: a capsule with nothing moving in it is what
+                // says "heard you, not working yet".
                 float inner = distance + 1.4f;
-                if (inner < 0f)
+                if (sweeping && inner < 0f)
                 {
                     float alongSweep = MathF.Abs(px - sweepCentreX) / sweepHalfWidth;
                     if (alongSweep < 1f)

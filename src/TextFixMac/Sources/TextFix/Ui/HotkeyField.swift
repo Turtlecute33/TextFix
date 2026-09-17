@@ -10,7 +10,10 @@ import Carbon.HIToolbox
 /// record a bare letter - claiming `A` globally would break typing everywhere on the machine.
 final class HotkeyField: NSView {
     var binding: HotkeyBinding? {
-        didSet { needsDisplay = true }
+        didSet {
+            needsDisplay = true
+            publishAccessibilityValue()
+        }
     }
 
     /// Called with the new binding, or nil when the field was cleared.
@@ -30,9 +33,21 @@ final class HotkeyField: NSView {
         wantsLayer = true
         setAccessibilityRole(.button)
         setAccessibilityLabel("Hotkey")
+        setAccessibilityHelp("Focus this field and press the key combination you want.")
+        publishAccessibilityValue()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The combination is drawn, not laid out, so without this VoiceOver can say that a hotkey
+    /// field exists but never what is in it - which is the only thing about it worth knowing.
+    private func publishAccessibilityValue() {
+        if let binding, !binding.isEmpty {
+            setAccessibilityValue(binding.format())
+        } else {
+            setAccessibilityValue("Not set")
+        }
+    }
 
     override var intrinsicContentSize: NSSize { NSSize(width: 150, height: 22) }
 
@@ -101,7 +116,9 @@ final class HotkeyField: NSView {
         path.fill()
 
         if recording {
-            NSColor.controlAccentColor.setStroke()
+            // Doubles as the focus ring: focusing this field *is* recording, so one indicator
+            // covers both, and at two points it clears the same bar a real focus ring has to.
+            NSColor.keyboardFocusIndicatorColor.setStroke()
             path.lineWidth = 2
         } else {
             NSColor.separatorColor.setStroke()

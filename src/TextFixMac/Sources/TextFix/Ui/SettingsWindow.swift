@@ -84,7 +84,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         // window, so it comes to the front like any other.
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(apiKeyField)
+        // Only when there is nothing there yet. A field holding a saved key, focused, is one stray
+        // keystroke away from being saved as that keystroke.
+        window.makeFirstResponder(SecretStore.hasApiKey(for: provider) ? modelPopUp : apiKeyField)
     }
 
     // ---- layout ----
@@ -552,8 +554,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         // The API key goes straight to the keychain rather than into the config object, so it never
         // passes through config.json.
         if apiKeyDirty {
-            let typed = apiKeyField.stringValue
-            if typed != Self.keyPlaceholder { SecretStore.setApiKey(typed, for: provider) }
+            let typed = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if typed == Self.keyPlaceholder {
+                // Untouched.
+            } else if typed.isEmpty {
+                SecretStore.setApiKey("", for: provider) // an emptied field removes the key
+            } else if !Self.looksLikeApiKey(typed) {
+                complain(
+                    "That does not look like an API key. Paste the whole key, or clear the field"
+                    + " to remove the one you have.")
+                return nil
+            } else {
+                SecretStore.setApiKey(typed, for: provider)
+            }
         }
 
         let wantsLoginItem = loginItemCheck.state == .on
@@ -563,6 +576,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
 
         return result
+    }
+
+    /// Deliberately a shape check, not a format check: both providers issue keys in their own
+    /// shapes and a third could change tomorrow. All this has to catch is the accident - a field
+    /// that was showing a saved key and now holds one or two characters.
+    private static func looksLikeApiKey(_ value: String) -> Bool {
+        value.count >= 16 && !value.contains(where: \.isWhitespace)
     }
 
     private func complain(_ message: String) {
@@ -594,6 +614,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// another app - so the banner is re-checked every time the window comes back to the front
     /// rather than only when it was built.
     func windowDidBecomeKey(_ notification: Notification) {
-        accessibilityBanner?.isHidden = Permissions.isTrusted
+        let trusted = Permissions.isTrusted
+        guard accessibilityBanner?.isHidden != trusted else { return }
+        accessibilityBanner?.isHidden = trusted
+        // The banner is an arranged subview, so hiding it collapses the stack - and the window is
+        // not resizable, so without this the layout would be left fighting a height that no longer
+        // matches its contents.
+        resizeToFit()
+    }
+
+    private func resizeToFit() {
+        guard let window, let root = window.contentView else { return }
+        root.layoutSubtreeIfNeeded()
+        let size = root.fittingSize
+        guard size.width > 0, size.height > 0 else { return }
+        window.setContentSize(size)
     }
 }

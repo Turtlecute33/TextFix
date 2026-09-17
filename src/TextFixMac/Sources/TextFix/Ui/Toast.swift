@@ -53,11 +53,20 @@ final class Toast: NSObject {
 
         panel.alphaValue = 0
         panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        Motion.animate(duration: Motion.enterDuration, timing: .easeOut) { _ in
             panel.animator().alphaValue = 1
         }
+
+        // A borderless non-activating panel is invisible to VoiceOver, so the one thing the agent
+        // ever has to tell the user would otherwise be the one thing it cannot. Announcing it is
+        // what makes a failure audible rather than only visible.
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: "\(title). \(message)",
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ])
 
         self.panel = panel
         dismissTimer = Timer.scheduledTimer(withTimeInterval: dismissAfter, repeats: false) { [weak self] _ in
@@ -70,12 +79,11 @@ final class Toast: NSObject {
         dismissTimer = nil
         guard let panel else { return }
         self.panel = nil
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.14
+        Motion.animate(duration: Motion.exitDuration, timing: .easeIn) { _ in
             panel.animator().alphaValue = 0
-        }, completionHandler: {
+        } completion: {
             panel.orderOut(nil)
-        })
+        }
     }
 
     func shutdown() {

@@ -46,8 +46,22 @@ enum PasteboardBridge {
 
     static var changeCount: Int { NSPasteboard.general.changeCount }
 
-    static func text() -> String? {
-        NSPasteboard.general.string(forType: .string)
+    /// Reads the pasteboard's text, materialising at most `maxUTF16` code units of it.
+    ///
+    /// The cap matters because this runs on the main thread and the pasteboard can hold hundreds
+    /// of megabytes. UTF-8 never needs more than three bytes per UTF-16 code unit - a surrogate
+    /// pair is two units and four bytes - so anything past three times the cap cannot possibly be
+    /// inside the limit, and decoding only that prefix still yields a string the caller's length
+    /// check is guaranteed to reject.
+    static func text(maxUTF16: Int = Int.max) -> String? {
+        let pasteboard = NSPasteboard.general
+        guard maxUTF16 != Int.max else { return pasteboard.string(forType: .string) }
+        guard maxUTF16 > 0, let data = pasteboard.data(forType: .string) else { return nil }
+        let ceiling = maxUTF16 * 3
+        if data.count > ceiling {
+            return String(decoding: data.prefix(ceiling), as: UTF8.self)
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Puts `text` on the pasteboard. When `transient` is set the payload is flagged so clipboard
@@ -139,14 +153,17 @@ enum PasteboardBridge {
     /// the same text twice leaves the pasteboard byte-identical. Writing our own marker first makes
     /// it decidable: if the pasteboard still holds the marker the copy did not happen (the
     /// selection was empty); anything else is what the host copied.
-    static func waitForCopy(marker: String, baseline: Int, timeoutMs: Int) -> String? {
+    static func waitForCopy(marker: String, baseline: Int, timeoutMs: Int, maxUTF16: Int) -> String? {
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
         var lastSeen = baseline
+        // The marker has to survive the cap intact or "is the marker still there" stops being
+        // decidable, so read at least far enough to recognise it.
+        let readLimit = max(maxUTF16, marker.utf16.count + 1)
         while true {
             let current = changeCount
             if current != lastSeen {
                 lastSeen = current
-                if let copied = text(), !copied.isEmpty, copied != marker { return copied }
+                if let copied = text(maxUTF16: readLimit), !copied.isEmpty, copied != marker { return copied }
             }
             if Date() >= deadline { return nil }
             // The main thread owns the pasteboard for the length of a capture, so this is a sleep

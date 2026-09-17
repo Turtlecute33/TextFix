@@ -60,6 +60,10 @@ struct CaptureOptions {
     let useAccessibilityRead: Bool
     let selectionProbeMs: Int
     let copyTimeoutMs: Int
+    /// The most text worth reading off the pasteboard, in UTF-16 code units. One more than the
+    /// caller's limit, so an oversized read is recognisably over it without being materialised in
+    /// full on the main thread.
+    let maxUTF16: Int
 }
 
 enum CaptureResult {
@@ -94,7 +98,13 @@ enum TextTarget {
 
     // ---- capture ----
 
-    static func capture(options: CaptureOptions) -> CaptureResult {
+    /// - Parameter onTargetResolved: called once the focused element is known and has passed the
+    ///   secure-field check, with its caret rectangle if it publishes one. This is where the caller
+    ///   puts its indicator on screen: everything after it can take the better part of a second on
+    ///   the pasteboard path, and a hotkey that changes nothing for that long reads as a dead key.
+    static func capture(
+        options: CaptureOptions, onTargetResolved: (CGRect?) -> Void
+    ) -> CaptureResult {
         guard let frontmost = NSWorkspace.shared.frontmostApplication else {
             return .failed("No app has focus.")
         }
@@ -108,6 +118,10 @@ enum TextTarget {
         if options.skipPasswordFields, let element, isSecureField(element) {
             return .failed("That looks like a password field, so nothing was sent.")
         }
+
+        onTargetResolved(element.flatMap {
+            caretRect(element: $0, range: Ax.range($0, kAXSelectedTextRangeAttribute))
+        })
 
         // Taken before the read, not inside the path that borrows the pasteboard, because the
         // Accessibility read borrows nothing and the *replace* still pastes: without this the
@@ -165,10 +179,21 @@ enum TextTarget {
         func cleanup(_ message: String) -> CaptureResult {
             if let saved {
                 PasteboardBridge.restoreOrClear(saved)
-            } else if let probeMarker, PasteboardBridge.text() == probeMarker {
+            } else if let probeMarker,
+                      PasteboardBridge.text(maxUTF16: probeMarker.utf16.count + 1) == probeMarker {
                 PasteboardBridge.clear()
             }
             return .failed(message)
+        }
+
+        /// CGEvent.post reports nothing, so a chord that went nowhere looks exactly like an empty
+        /// field. The one cause the user can act on is the permission, so ask about it before
+        /// telling them a field they can see has text in it is empty.
+        func readFailureMessage() -> String {
+            if !isTrusted || Keystrokes.lastSendBlocked {
+                return "macOS blocked keyboard input. Grant TextFix Accessibility permission."
+            }
+            return "Could not read any text from that field."
         }
 
         Keystrokes.clearSendBlocked()
@@ -186,7 +211,8 @@ enum TextTarget {
 
         var mode = CaptureMode.selection
         var text = PasteboardBridge.waitForCopy(
-            marker: marker, baseline: baseline, timeoutMs: options.selectionProbeMs)
+            marker: marker, baseline: baseline, timeoutMs: options.selectionProbeMs,
+            maxUTF16: options.maxUTF16)
         Log.debug("Selection probe: \(text == nil ? "nothing selected" : "\(text!.count) characters")")
 
         if text == nil || text!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -206,7 +232,8 @@ enum TextTarget {
                 let mark = PasteboardBridge.changeCount
                 guard Keystrokes.sendCommandChord(kVK_ANSI_C, eventDelayMsOverride: chordDelayMs) else { return nil }
                 return PasteboardBridge.waitForCopy(
-                    marker: nextMarker, baseline: mark, timeoutMs: options.copyTimeoutMs)
+                    marker: nextMarker, baseline: mark, timeoutMs: options.copyTimeoutMs,
+                    maxUTF16: options.maxUTF16)
             }
 
             text = readWholeField(settleMs: Keystrokes.chordSettleMs, chordDelayMs: nil)
@@ -219,9 +246,7 @@ enum TextTarget {
                     settleMs: Keystrokes.slowChordSettleMs, chordDelayMs: Keystrokes.slowKeyEventDelayMs)
             }
             guard let whole = text, !whole.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return cleanup(Keystrokes.lastSendBlocked
-                    ? "macOS blocked keyboard input. Grant TextFix Accessibility permission."
-                    : "Could not read any text from that field.")
+                return cleanup(readFailureMessage())
             }
             text = whole
             mode = .wholeText
@@ -297,6 +322,9 @@ enum TextTarget {
         guard Keystrokes.sendCommandChord(kVK_ANSI_V) else {
             return Keystrokes.lastSendBlocked ? .blocked : .failed
         }
+        // CGEvent.post has no return value, so a permission revoked since the capture would
+        // otherwise look exactly like a successful paste. This is the one question with an answer.
+        guard isTrusted else { return .blocked }
         return .replaced
     }
 
@@ -319,7 +347,7 @@ enum TextTarget {
 
     /// The caret rectangle in Quartz screen coordinates, or nil when the focused app publishes
     /// none. Used only to place the indicator.
-    private static func caretRect(element: AXUIElement, range: CFRange?) -> CGRect? {
+    static func caretRect(element: AXUIElement, range: CFRange?) -> CGRect? {
         if let range {
             // A zero-length range is the caret itself; a few hosts answer only for a real span, so
             // one character is the fallback.

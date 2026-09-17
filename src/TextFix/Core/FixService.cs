@@ -15,6 +15,11 @@ namespace TextFix.Core;
 ///
 /// Everything that touches the clipboard or synthesises keys runs on the message thread, so there
 /// is exactly one writer and no lock needed around the target state.
+///
+/// The clipboard is the one piece of irreplaceable user data this code holds, so the rule around it
+/// is absolute: a restore that has been armed is always settled before anything else is allowed to
+/// touch the clipboard. <see cref="FlushPendingRestore"/> is that guarantee, and every path that
+/// could otherwise drop a pending restore calls it - a second fix, a cancel, and shutdown.
 /// </summary>
 internal sealed class FixService
 {
@@ -25,6 +30,15 @@ internal sealed class FixService
     }
 
     internal const nuint RestoreTimerId = 21;
+
+    /// <summary>Shown while the capture is running, before the request has gone out.</summary>
+    private const string ReadingTooltip = "TextFix - reading text...";
+
+    /// <summary>
+    /// Shown while the request is in flight. It names the cancel gesture because a second press
+    /// cancelling is otherwise undiscoverable - there is nowhere else the agent could say it.
+    /// </summary>
+    private const string WorkingTooltip = "TextFix - fixing text... (press the hotkey again to cancel)";
 
     private readonly nint _hwnd;
     private readonly TrayIcon _tray;
@@ -42,6 +56,9 @@ internal sealed class FixService
     private volatile string? _zdrFallbackModel;
     private ClipboardSnapshot? _pendingRestore;
 
+    /// <summary>True while an indicator is on screen, so every exit path can take it down again.</summary>
+    private bool _indicatorShown;
+
     internal FixService(nint hwnd, TrayIcon tray, Func<AppConfig> config)
     {
         _hwnd = hwnd;
@@ -57,6 +74,12 @@ internal sealed class FixService
             Cancel();
             return;
         }
+
+        // The previous fix may still have a clipboard restore sitting on the timer. Taking a
+        // snapshot now would record our own output as "what the user was holding", and arming a
+        // second restore would silently drop the first - so settle the old one before anything
+        // here is allowed near the clipboard.
+        FlushPendingRestore();
 
         AppConfig config = _config();
         if (actionIndex < 0 || actionIndex >= config.Actions.Count) return;
@@ -96,23 +119,38 @@ internal sealed class FixService
             AiClient.Prewarm(provider);
         }
 
+        // Feedback *before* the capture rather than after it. The whole-field path spends the
+        // better part of a second in clipboard round trips, and a hotkey that changes nothing on
+        // screen for that long reads as a dead key. The indicator starts in its quiet form -
+        // present, not sweeping - and is promoted once the request is actually in flight, so the
+        // two questions the user has at those two moments ("did my key register?" and "is it
+        // stuck?") each get their own answer.
+        nint foreground = Win32.GetForegroundWindow();
+        ShowIndicator(config, TextTarget.GetCaretRect(foreground), foreground, sweeping: false);
+
         var options = new CaptureOptions(
             AllowSelectAll: action.WholeTextWhenNoSelection,
             SkipPasswordFields: config.SkipPasswordFields,
             TakeSnapshot: config.RestoreClipboard,
             SelectionProbeMs: config.SelectionProbeMs,
-            CopyTimeoutMs: config.CopyTimeoutMs);
+            CopyTimeoutMs: config.CopyTimeoutMs,
+            // One character past the limit is all we ever need to read: the check below rejects
+            // anything that long, and the cap is what stops a 200 MB clipboard being turned into
+            // a string on the message thread just to discover it was never going to fit.
+            MaxChars: config.MaxInputLength + 1);
 
         if (!TextTarget.TryCapture(_hwnd, options, out TextCapture? capture, out string captureError) || capture == null)
         {
             // TryCapture has already put the clipboard back; it is the only code that knows how
             // far the probe got.
+            HideIndicator();
             Notify("Nothing fixed", captureError, isError: true);
             return;
         }
 
         if (capture.Text.Length > config.MaxInputLength)
         {
+            HideIndicator();
             RestoreClipboardNow(capture.Saved);
             Notify("Too much text", "That is more than " + config.MaxInputLength + " characters.", isError: true);
             return;
@@ -125,8 +163,9 @@ internal sealed class FixService
         _state = State.Working;
         long token = ++_token;
 
-        if (config.Indicator == "caret") CaretPulse.Show(capture.CaretRect, capture.Foreground);
-        _tray.SetTooltip("TextFix - fixing text...");
+        // Now that the real caret rectangle is known, settle the indicator onto it and promote it
+        // to the sweeping form. Repositioning does not restart the entrance animation.
+        ShowIndicator(config, capture.CaretRect, capture.Foreground, sweeping: true);
 
         if (config.DryRun)
         {
@@ -183,8 +222,11 @@ internal sealed class FixService
         _cts?.Cancel();
         _cts = null;
         _state = State.Idle;
-        CaretPulse.Hide();
-        _tray.SetTooltip(AgentWindow.IdleTooltip);
+        HideIndicator();
+        // Belt and braces: Start already settles any pending restore before it reaches Working,
+        // so this should find nothing. It is here so the invariant survives a future edit that
+        // reorders the two.
+        FlushPendingRestore();
         RestoreClipboardNow(_capture?.Saved);
         _capture = null;
     }
@@ -196,8 +238,7 @@ internal sealed class FixService
 
         _state = State.Idle;
         _cts = null;
-        CaretPulse.Hide();
-        _tray.SetTooltip(AgentWindow.IdleTooltip);
+        HideIndicator();
 
         TextCapture? capture = _capture;
         _capture = null;
@@ -264,9 +305,16 @@ internal sealed class FixService
                 break;
 
             case ReplaceOutcome.FocusChanged:
-                // Never paste into a window the user switched to. Hand them the text instead.
-                ClipboardBridge.SetText(proposed, _hwnd, transient: false);
-                Notify("Focus changed", "The fixed text is on your clipboard.", isError: false);
+                // Never paste into a window the user switched to. Hand them the text instead -
+                // flagged transient, because a rewrite they never asked to keep has no business
+                // being archived in Win+V history or synced to their other devices.
+                ClipboardBridge.SetText(proposed, _hwnd, transient: true);
+                Notify(
+                    "Focus changed",
+                    capture.Saved is { IsEmpty: false }
+                        ? "The fixed text is on your clipboard, replacing what was there."
+                        : "The fixed text is on your clipboard.",
+                    isError: false);
                 break;
 
             case ReplaceOutcome.Blocked:
@@ -284,17 +332,43 @@ internal sealed class FixService
         }
     }
 
-    internal void OnRestoreTimer()
+    internal void OnRestoreTimer() => FlushPendingRestore();
+
+    /// <summary>
+    /// Runs a clipboard restore that is still sitting on the timer, right now.
+    ///
+    /// Every caller exists because the restore would otherwise be lost. A second fix would
+    /// overwrite the snapshot and reset the timer; a quit would drop the WM_TIMER entirely, since
+    /// GetMessage retrieves WM_QUIT well ahead of WM_TIMER in the queue's priority order. Either
+    /// way the user's clipboard would be gone and our own output left sitting in its place.
+    /// </summary>
+    internal void FlushPendingRestore()
     {
-        Win32.KillTimer(_hwnd, RestoreTimerId);
         ClipboardSnapshot? snapshot = _pendingRestore;
+        if (snapshot == null) return;
         _pendingRestore = null;
-        if (snapshot != null) ClipboardBridge.RestoreOrClear(snapshot, _hwnd);
+        Win32.KillTimer(_hwnd, RestoreTimerId);
+        ClipboardBridge.RestoreOrClear(snapshot, _hwnd);
     }
 
     private void RestoreClipboardNow(ClipboardSnapshot? snapshot)
     {
         if (snapshot != null) ClipboardBridge.RestoreOrClear(snapshot, _hwnd);
+    }
+
+    private void ShowIndicator(AppConfig config, RECT caret, nint foreground, bool sweeping)
+    {
+        if (config.Indicator == "caret") CaretPulse.Show(caret, foreground, sweeping);
+        _indicatorShown = true;
+        _tray.SetTooltip(sweeping ? WorkingTooltip : ReadingTooltip);
+    }
+
+    private void HideIndicator()
+    {
+        if (!_indicatorShown) return;
+        _indicatorShown = false;
+        CaretPulse.Hide();
+        _tray.SetTooltip(AgentWindow.IdleTooltip);
     }
 
     private void Notify(string title, string message, bool isError)
