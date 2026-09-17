@@ -29,7 +29,7 @@ enum SecretStore {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else {
+        guard status == errSecSuccess, var data = item as? Data else {
             if status != errSecItemNotFound {
                 // A keychain that refuses to answer must read as "no key" rather than taking the
                 // whole feature down: re-entering it in settings overwrites the item and
@@ -37,6 +37,12 @@ enum SecretStore {
                 Log.warn("Could not read the stored API key (OSStatus \(status))")
             }
             return ""
+        }
+        defer {
+            // The String itself cannot be wiped - it is immutable and GC-managed - but the bytes
+            // the keychain handed back can be, and leaving a second copy of the key lying in the
+            // heap for no reason is not a trade worth making.
+            data.resetBytes(in: 0..<data.count)
         }
         return String(data: data, encoding: .utf8) ?? ""
     }

@@ -38,7 +38,18 @@ internal static class SecretStore
             }
             byte[] cipher = Convert.FromBase64String(encoded);
             byte[]? plain = Unprotect(cipher);
-            return plain == null ? string.Empty : Encoding.UTF8.GetString(plain);
+            if (plain == null) return string.Empty;
+            try
+            {
+                return Encoding.UTF8.GetString(plain);
+            }
+            finally
+            {
+                // The string itself cannot be wiped - it is an immutable, movable, GC-managed
+                // object - but the decrypted bytes can be, and leaving a second copy of the key
+                // lying in the heap for no reason is not a trade worth making.
+                Array.Clear(plain);
+            }
         }
         catch (Exception e)
         {
@@ -64,7 +75,16 @@ internal static class SecretStore
             }
             else
             {
-                byte[]? cipher = Protect(Encoding.UTF8.GetBytes(trimmed));
+                byte[] plain = Encoding.UTF8.GetBytes(trimmed);
+                byte[]? cipher;
+                try
+                {
+                    cipher = Protect(plain);
+                }
+                finally
+                {
+                    Array.Clear(plain);
+                }
                 if (cipher == null)
                 {
                     Log.Warn("DPAPI refused to encrypt the API key; it was not saved");

@@ -36,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // A second launch - from Spotlight, from the Finder - brings up the settings of the copy
         // that is already running instead of fighting it for the hotkeys.
+        //
+        // Any process running as this user can post this notification and make the settings window
+        // appear. That is not worth defending against: every same-user IPC channel has the identical
+        // exposure, and code already running as the user can simply quit the agent instead. The
+        // notification carries nothing and does nothing but open a window.
         DistributedNotificationCenter.default().addObserver(
             self,
             selector: #selector(openSettings),
@@ -50,8 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // waiting for the user to press a hotkey and get an error.
             openSettings()
             if !Permissions.isTrusted { Permissions.requestWithSystemPrompt() }
-        } else if SecretStore.hasApiKey(for: config.providerValue) {
+        } else if config.prewarmOnStartup, SecretStore.hasApiKey(for: config.providerValue) {
             // Warms the TLS session so the first fix of the session is as fast as the second.
+            // Opt-out, because it is the one thing the agent does without being asked.
             AiClient.prewarm(config.providerValue)
         }
     }
