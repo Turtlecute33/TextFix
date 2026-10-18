@@ -23,8 +23,16 @@ final class HotkeyField: NSView {
     /// the window can say why nothing was recorded.
     var onRejected: ((String) -> Void)?
 
+    /// Called when recording starts and stops. A registered hotkey never reaches a window, so the
+    /// owner releases them for exactly as long as this field is listening - not for as long as
+    /// the settings window happens to be open.
+    var onRecordingChanged: ((Bool) -> Void)?
+
     private var recording = false {
-        didSet { needsDisplay = true }
+        didSet {
+            needsDisplay = true
+            if recording != oldValue { onRecordingChanged?(recording) }
+        }
     }
 
     override init(frame frameRect: NSRect) {
@@ -96,10 +104,20 @@ final class HotkeyField: NSView {
         }
 
         let candidate = HotkeyBinding.from(event: event)
-        if candidate.modifiers == 0 && !candidate.isSafeWithoutModifiers {
+        // Shift alone counts as no modifier: claiming Shift+A globally breaks typing a capital A
+        // everywhere on the Mac.
+        if candidate.modifiers & ~UInt32(shiftKey) == 0 && !candidate.isSafeWithoutModifiers {
             onRejected?(
-                "\(candidate.display()) on its own would be swallowed everywhere on this Mac. "
-                + "Add Control, Option, Shift or Command, or use one of F13-F20.")
+                "\(candidate.display()) would be swallowed everywhere on this Mac. "
+                + "Add Control, Option or Command, or use one of F13-F20.")
+            return true
+        }
+        // Matched by the letter the layout types rather than by key position, because that is how
+        // apps match their shortcuts. TextFix presses Cmd+A, Cmd+C and Cmd+V itself, and a hotkey
+        // on one of them would set itself off again from its own keystrokes.
+        let letter = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if candidate.modifiers == UInt32(cmdKey), ["a", "c", "v", "x", "z", "q", "w"].contains(letter) {
+            onRejected?("\(candidate.display()) is a standard shortcut every app uses. Pick another combination.")
             return true
         }
         binding = candidate

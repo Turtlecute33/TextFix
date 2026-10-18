@@ -27,6 +27,7 @@ final class FixService {
     private var token = 0
     private var currentTask: Task<Void, Never>?
     private var capture: TextCapture?
+    private var prompt = ""
     private var pendingRestore: PasteboardSnapshot?
     private var pendingRestoreWork: DispatchWorkItem?
 
@@ -122,12 +123,14 @@ final class FixService {
         // maxInputLength in config.json means the same thing on both platforms.
         guard captured.text.utf16.count <= config.maxInputLength else {
             hideIndicator()
-            restorePasteboardNow(captured.saved)
+            restoreAfterCapture(captured)
             notify("Too much text", "That is more than \(config.maxInputLength) characters.", isError: true)
             return
         }
 
         capture = captured
+        let trimmedPrompt = action.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        prompt = trimmedPrompt.isEmpty ? Defaults.fixPrompt : trimmedPrompt
         state = .working
         token += 1
         let token = self.token
@@ -147,9 +150,7 @@ final class FixService {
         let request = AiRequest(
             apiKey: apiKey,
             model: model,
-            systemPrompt: action.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? Defaults.fixPrompt
-                : action.prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+            systemPrompt: prompt,
             provider: provider,
             useZeroDataRetention: config.zeroDataRetention,
             disableReasoning: !config.allowReasoning,
@@ -191,7 +192,7 @@ final class FixService {
         // so this should find nothing. It is here so the invariant survives a future edit that
         // reorders the two.
         flushPendingRestore()
-        restorePasteboardNow(capture?.saved)
+        restoreAfterCapture(capture)
         capture = nil
     }
 
@@ -211,80 +212,99 @@ final class FixService {
         if let zdrFallbackModel, AiClient.shouldWarnAboutZdrFallback(zdrFallbackModel) {
             notify(
                 "Zero data retention unavailable",
-                "This request used standard routing for \(zdrFallbackModel).",
+                "No zero-retention route for \(zdrFallbackModel). TextFix used a provider that does not keep your text for training.",
                 isError: false)
         }
 
         if let error {
-            restorePasteboardNow(capture?.saved)
+            restoreAfterCapture(capture)
             notify("Text fix failed", error, isError: true)
             return
         }
         guard let text, let capture else {
             // Cancelled between the request finishing and here.
-            restorePasteboardNow(capture?.saved)
+            restoreAfterCapture(capture)
             return
         }
 
         // Unwrap first: a prompt that fences its input in tags sometimes gets tags back.
-        let proposed = AiText.sanitize(AiText.unwrap(text), maxLength: Defaults.maxOutputLength)
-        guard !proposed.isEmpty else {
-            restorePasteboardNow(capture.saved)
+        let answer = AiText.sanitize(AiText.unwrap(text, prompt: prompt))
+        guard !answer.isEmpty else {
+            restoreAfterCapture(capture)
             notify("Text fix failed", "The model returned nothing usable.", isError: true)
             return
         }
+        guard answer.utf16.count <= AiText.outputLimit(inputLength: capture.text.utf16.count) else {
+            // Refused, never cut: a shortened answer pasted over the field deletes its end.
+            restoreAfterCapture(capture)
+            notify("Text fix failed", "The answer was much longer than your text, so nothing was changed.", isError: true)
+            return
+        }
+        let proposed = AiText.keepEdgeWhitespace(original: capture.text, answer: answer)
         guard proposed != capture.text else {
             // Nothing to change. Writing identical text would still cost the user an undo step and
-            // a scroll jump, so leave the field alone.
-            restorePasteboardNow(capture.saved)
-            Log.debug("Model returned the input unchanged; field left untouched")
+            // a scroll jump, so leave the field alone - but say so, or the hotkey looks dead.
+            restoreAfterCapture(capture)
+            notify("No changes needed", "The text is already fine as it is.", isError: false)
             return
         }
 
+        // What comes back after a paste. Normally the snapshot from the capture; but the
+        // Accessibility path took none, and on either path something new on the pasteboard since
+        // the capture is most likely the user copying while the request was out - that is what
+        // they are holding now, so that is what is snapshotted, at the last moment.
+        var restoreTo = capture.saved
         let outcome = TextTarget.replace(
             capture: capture,
             with: proposed,
             requireSameFocus: config.replaceOnlyIfFocusUnchanged,
-            mode: config.replaceModeValue)
+            mode: config.replaceModeValue,
+            beforePaste: {
+                guard config.restorePasteboard else { return }
+                if restoreTo == nil || PasteboardBridge.changeCount != capture.pasteboardCount {
+                    restoreTo = PasteboardBridge.snapshot()
+                }
+            })
 
         switch outcome {
         case .replaced:
             // Whether the pasteboard was borrowed is a fact, not something to infer from the
             // configured mode: an Accessibility write that was refused falls back to a paste, and
             // a paste that happened needs the delay whatever asked for it.
-            let pasteboardMoved = capture.saved.map { $0.changeCount != PasteboardBridge.changeCount } ?? false
-            if let saved = capture.saved, pasteboardMoved {
+            if let restoreTo, restoreTo.changeCount != PasteboardBridge.changeCount {
                 // The paste needs the pasteboard to stay put for a moment: some hosts read it
                 // asynchronously after Cmd+V returns.
-                schedulePasteboardRestore(saved, afterMs: config.pasteboardRestoreDelayMs)
-            } else {
-                restorePasteboardNow(capture.saved)
-            }
-            if capture.saved?.complete == false {
-                notify(
-                    "Clipboard partly restored",
-                    "Some clipboard content could not be copied back.",
-                    isError: false)
+                schedulePasteboardRestore(restoreTo, afterMs: config.pasteboardRestoreDelayMs)
+                if !restoreTo.complete {
+                    notify(
+                        "Clipboard partly restored",
+                        "Some clipboard content could not be copied back.",
+                        isError: false)
+                }
             }
 
-        case .focusChanged:
-            // Never write into a window the user switched to. Hand them the text instead - flagged
-            // transient, because a rewrite they never asked to keep has no business being archived
-            // by a clipboard manager or synced to their other devices.
+        case .focusChanged, .unconfirmed:
+            // Never write into a window the user switched to, or on top of a write that may still
+            // land. Hand them the text instead - flagged transient, because a rewrite they never
+            // asked to keep has no business being archived by a clipboard manager.
+            let replacing = capture.saved.map { !$0.isEmpty } ?? PasteboardBridge.hasContent
             PasteboardBridge.setText(proposed, transient: true)
+            let reason = outcome == .unconfirmed
+                ? "The app did not confirm the change."
+                : "Focus or the text changed while TextFix worked."
             notify(
-                "Focus changed",
-                capture.saved.map { !$0.isEmpty } == true
-                    ? "The fixed text is on your clipboard, replacing what was there."
-                    : "The fixed text is on your clipboard.",
+                "Text not replaced",
+                replacing
+                    ? "\(reason) The fixed text is on your clipboard, replacing what was there."
+                    : "\(reason) The fixed text is on your clipboard.",
                 isError: false)
 
         case .blocked:
-            restorePasteboardNow(capture.saved)
+            restorePasteboardNow(restoreTo)
             Permissions.promptForAccessibility()
 
         case .failed:
-            restorePasteboardNow(capture.saved)
+            restorePasteboardNow(restoreTo)
             notify("Text fix failed", "Could not put the fixed text back.", isError: true)
         }
     }
@@ -321,6 +341,18 @@ final class FixService {
         PasteboardBridge.restoreOrClear(snapshot)
     }
 
+    /// Puts the pasteboard back after a capture that ended without a paste - unless something new
+    /// landed on it while the request was out. That is most likely the user copying something,
+    /// and it is now what they are holding; the older snapshot would overwrite it.
+    private func restoreAfterCapture(_ capture: TextCapture?) {
+        guard let capture, let saved = capture.saved else { return }
+        guard PasteboardBridge.changeCount == capture.pasteboardCount else {
+            Log.debug("The pasteboard changed during the request; left as it is")
+            return
+        }
+        PasteboardBridge.restoreOrClear(saved)
+    }
+
     // ---- shared ----
 
     private func showIndicator(config: AppConfig, caretRect: CGRect?, sweeping: Bool) {
@@ -355,6 +387,9 @@ final class FixService {
     }
 
     func shutdown() {
+        // A request still in flight is cancelled through the usual path, which puts back the
+        // pasteboard its capture borrowed.
+        cancel()
         currentTask?.cancel()
         currentTask = nil
         // Settled rather than discarded: a quit inside the restore delay would otherwise leave the

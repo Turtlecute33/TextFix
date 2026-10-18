@@ -2,6 +2,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using TextFix.Core;
 
 namespace TextFix.Ai;
 
@@ -44,7 +45,10 @@ internal static class AiClient
     private const int PrewarmTimeoutMs = 5_000;
 
     private static readonly HttpClient Http = CreateClient();
-    private static long _lastContactTicks;
+    // Starts a full gap in the past rather than at zero: TickCount64 counts from boot, so a zero
+    // here made every prewarm in the first 90 s after boot - the sign-in one it exists for - look
+    // too soon after a contact that never happened.
+    private static long _lastContactTicks = -PrewarmMinGapMs;
     private static int _prewarmInFlight;
 
     private static HttpClient CreateClient()
@@ -60,16 +64,28 @@ internal static class AiClient
             AutomaticDecompression = DecompressionMethods.All,
             MaxConnectionsPerServer = 4,
             AllowAutoRedirect = false,
+            // Nothing here needs a cookie, and a jar would hand cookies set on an authenticated
+            // request back on the unauthenticated prewarm, tying the two together.
+            UseCookies = false,
         };
         return new HttpClient(handler)
         {
             // Per-attempt deadlines are enforced with linked tokens instead, so that a retry
             // budget can shorten later attempts without shortening the first one.
             Timeout = Timeout.InfiniteTimeSpan,
-            DefaultRequestVersion = HttpVersion.Version20,
-            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
     }
+
+    /// <summary>
+    /// HTTP/2 when the server offers it. Set on each message because HttpClient's default request
+    /// version only applies to its convenience methods, never to a message passed to SendAsync.
+    /// </summary>
+    private static HttpRequestMessage NewMessage(HttpMethod method, string url) =>
+        new(method, url)
+        {
+            Version = HttpVersion.Version20,
+            VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+        };
 
     /// <summary>
     /// Opens a pooled TCP+TLS connection to the provider ahead of the real request, so the
@@ -87,7 +103,7 @@ internal static class AiClient
             try
             {
                 using var cts = new CancellationTokenSource(PrewarmTimeoutMs);
-                using var request = new HttpRequestMessage(HttpMethod.Get, provider.PrewarmEndpoint());
+                using var request = NewMessage(HttpMethod.Get, provider.PrewarmEndpoint());
                 using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cts.Token)
                     .ConfigureAwait(false);
                 // Draining the body is what returns the socket to the pool; without it the whole
@@ -117,8 +133,8 @@ internal static class AiClient
         // A model whose ZDR route we already found missing would otherwise pay for a doomed
         // attempt on every single fix just to rediscover it.
         bool zdrSuppressed = zdrWanted && RouteFacts.IsZdrKnownUnavailable(req.Model);
-        // Report the downgrade even when it comes from the cache rather than a live refusal, so
-        // the user is told on every affected request and not only the first one in 30 minutes.
+        // Reported even when it comes from the cache rather than a live refusal, so the caller
+        // knows about every affected request and not only the first one in 30 minutes.
         bool fellBack = zdrSuppressed;
         bool requestZdr = zdrWanted && !zdrSuppressed;
 
@@ -129,9 +145,11 @@ internal static class AiClient
         }
         catch (AiException e) when (requestZdr && RouteFacts.IsZdrRouteUnavailable(e.StatusCode, e.ErrorBody))
         {
-            // ZDR is a preference, not a hard requirement. Retry once through normal routing so
-            // unsupported, custom or temporarily unavailable ZDR routes do not break the feature.
+            // No zero-retention route. Retry once, but never down to "anything goes": the retry
+            // still refuses every provider that keeps the text to train on (see
+            // DeniesDataCollection), and fails rather than go further.
             if (RouteFacts.IsZdrVerdictCacheable(e.StatusCode, e.ErrorBody)) RouteFacts.MarkZdrUnavailable(req.Model);
+            Log.Info("No zero-data-retention route; retrying with data collection denied");
             fellBack = true;
             text = await AttemptWithReasoningFallback(false).ConfigureAwait(false);
         }
@@ -166,17 +184,31 @@ internal static class AiClient
             for (int attempt = 0; attempt < MaxAttempts; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
+                long started = Environment.TickCount64;
                 try
                 {
-                    return await PerformAsync(userText, req, zdr, ChatTuningApplies(), deadline, ct).ConfigureAwait(false);
+                    string answer = await PerformAsync(userText, req, zdr, ChatTuningApplies(), deadline, ct).ConfigureAwait(false);
+                    Log.Debug("Attempt " + (attempt + 1) + " answered in " + (Environment.TickCount64 - started) + " ms");
+                    return answer;
                 }
                 catch (AiException e)
                 {
+                    Log.Debug("Attempt " + (attempt + 1) + " failed (status " + e.StatusCode + ") after "
+                        + (Environment.TickCount64 - started) + " ms");
                     if (zdr && req.Provider == AiProvider.OpenRouter && RouteFacts.IsZdrRouteUnavailable(e.StatusCode, e.ErrorBody))
                     {
                         throw new AiException(
                             "No zero data retention route is available for this model",
                             e.StatusCode, e.RetryAfterMs, e.ErrorBody);
+                    }
+                    if (!zdr && DeniesDataCollection(req) && RouteFacts.IsZdrRouteUnavailable(e.StatusCode, e.ErrorBody))
+                    {
+                        // Deliberately no status code: the 404 behind this would otherwise be
+                        // reported as "model not found", which sends the user looking in the
+                        // wrong place.
+                        throw new AiException(
+                            "No provider of this model meets your privacy setting. Pick another model, "
+                            + "or turn off zero data retention in settings.");
                     }
                     if (!AiStatus.IsRetryable(e.StatusCode) || attempt == MaxAttempts - 1) throw;
                     lastError = e;
@@ -185,8 +217,12 @@ internal static class AiClient
                     // off before repeating it is dead time the user spends watching a spinner.
                     skipBackoff = e.StatusCode == AiStatus.UnusableResponse;
                 }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
                 {
+                    // The connect timeout arrives here too, not as an HttpRequestException:
+                    // SocketsHttpHandler reports it as a cancellation wrapping a TimeoutException.
+                    // A route that could not be reached in 8 s will not be reached by retrying.
+                    if (e.InnerException is TimeoutException) throw new AiException("Could not reach the provider");
                     // Our own per-attempt read deadline. Text bodies are cheap to resend, so
                     // unlike the audio path this is worth one more try inside the budget.
                     if (attempt == MaxAttempts - 1) throw new AiException("Request timed out");
@@ -224,7 +260,7 @@ internal static class AiClient
     {
         byte[] body = BuildRequestBody(userText, req, enforceZdr, disableReasoning);
 
-        using var message = new HttpRequestMessage(HttpMethod.Post, req.Provider.ChatEndpoint());
+        using var message = NewMessage(HttpMethod.Post, req.Provider.ChatEndpoint());
         message.Headers.TryAddWithoutValidation("Authorization", "Bearer " + req.ApiKey);
         if (req.Provider == AiProvider.OpenRouter)
         {
@@ -301,10 +337,16 @@ internal static class AiClient
 
             if (enforceZdr && req.Provider == AiProvider.OpenRouter)
             {
-                // Best-effort preference: every enabled OpenRouter request asks for it first, and
-                // the caller retries without it when routing cannot satisfy the constraint.
+                // Asked for first on every enabled OpenRouter request. When routing cannot satisfy
+                // it, the caller retries once with the weaker guarantee below.
                 writer.WriteStartObject("provider");
                 writer.WriteBoolean("zdr", true);
+                writer.WriteEndObject();
+            }
+            else if (DeniesDataCollection(req))
+            {
+                writer.WriteStartObject("provider");
+                writer.WriteString("data_collection", "deny");
                 writer.WriteEndObject();
             }
 
@@ -321,6 +363,14 @@ internal static class AiClient
         }
         return buffer.WrittenSpan.ToArray();
     }
+
+    /// <summary>
+    /// True when the user asked for zero data retention on OpenRouter. A request that goes out
+    /// without the ZDR constraint - because no route offers it - still refuses every provider that
+    /// keeps prompts for training. It never falls further than that.
+    /// </summary>
+    private static bool DeniesDataCollection(AiRequest req) =>
+        req.Provider == AiProvider.OpenRouter && req.UseZeroDataRetention;
 
     private static void WriteSystemMessage(Utf8JsonWriter writer, string prompt)
     {
@@ -369,6 +419,17 @@ internal static class AiClient
         {
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw Unusable("Malformed API response");
+            if (root.TryGetProperty("error", out JsonElement error)
+                && error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("code", out JsonElement code)
+                && code.ValueKind == JsonValueKind.Number
+                && code.TryGetInt32(out int status)
+                && status is >= 400 and <= 599)
+            {
+                // An error envelope served with a 200. Its own code is the real status, so a 402
+                // or a 401 reads as what it is instead of being retried as a hiccup.
+                throw new AiException("API error: " + status, status, -1, responseBody);
+            }
             if (!root.TryGetProperty("choices", out JsonElement choices)
                 || choices.ValueKind != JsonValueKind.Array
                 || choices.GetArrayLength() == 0)
@@ -377,6 +438,28 @@ internal static class AiClient
                 // choices array is an upstream fault rather than a malformed reply. Either way it
                 // is the same transient, retryable condition.
                 throw Unusable("API response missing choices");
+            }
+
+            string? finish = choices[0].ValueKind == JsonValueKind.Object
+                && choices[0].TryGetProperty("finish_reason", out JsonElement reason)
+                && reason.ValueKind == JsonValueKind.String
+                    ? reason.GetString()
+                    : null;
+            Log.Debug("Finish reason: " + (finish ?? "none"));
+            switch (finish)
+            {
+                case "length":
+                    throw new AiException(
+                        "The answer was cut short, so nothing was changed. Try a shorter text.",
+                        AiStatus.AnswerCutShort);
+                case "content_filter":
+                    throw new AiException(
+                        "The provider's content filter stopped the answer, so nothing was changed.",
+                        AiStatus.AnswerCutShort);
+                case "error":
+                    // The upstream failed mid-answer. What came back is partial; asking again
+                    // usually clears it.
+                    throw Unusable("The answer stopped with an error");
             }
 
             string content = ExtractMessageText(choices[0]);

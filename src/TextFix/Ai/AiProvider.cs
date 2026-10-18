@@ -16,7 +16,9 @@ internal static class AiProviderExtensions
     internal const string OpenRouterPrefValue = "openrouter";
     internal const string PayPerQPrefValue = "payperq";
 
-    internal static AiProvider FromPref(string? value) => value switch
+    // Trimmed and case-folded the way the macOS agent reads it, so a hand-edited "PayPerQ" sends
+    // the request to PayPerQ on both platforms.
+    internal static AiProvider FromPref(string? value) => value?.Trim().ToLowerInvariant() switch
     {
         PayPerQPrefValue => AiProvider.PayPerQ,
         _ => AiProvider.OpenRouter,
@@ -119,10 +121,11 @@ internal static class ModelCatalog
     /// and a blank custom slug resolves to nothing at all rather than to a silent fallback the
     /// user never chose.
     /// </summary>
-    internal static string? Resolve(string selectedSlug, string customSlug)
+    internal static string? Resolve(string? selectedSlug, string? customSlug)
     {
-        if (selectedSlug != CustomSlug) return string.IsNullOrWhiteSpace(selectedSlug) ? null : selectedSlug;
-        string trimmed = customSlug.Trim();
+        string selected = selectedSlug?.Trim() ?? string.Empty;
+        if (selected != CustomSlug) return selected.Length == 0 ? null : selected;
+        string trimmed = customSlug?.Trim() ?? string.Empty;
         return trimmed.Length == 0 ? null : trimmed;
     }
 

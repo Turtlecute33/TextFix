@@ -76,10 +76,19 @@ internal sealed unsafe class SettingsWindow
     private nint _hwnd;
     private nint _font;
     private nint _boldFont;
+    private nint _icon;
     private uint _dpi = 96;
     private AiProvider _provider;
     private ModelEntry[] _models = [];
     private bool _apiKeyDirty;
+
+    /// <summary>
+    /// What each hotkey control was loaded with, in the control's own encoding. The control cannot
+    /// show the Windows key or a key outside its name table, so a binding the user did not
+    /// re-record is kept exactly as config.json had it rather than re-read through the control.
+    /// </summary>
+    private readonly ushort[] _loadedHotkeyValues = new ushort[2];
+    private readonly HotkeyBinding[] _loadedHotkeys = new HotkeyBinding[2];
 
     internal SettingsWindow(AppConfig config, Action<AppConfig?> onClosed)
     {
@@ -111,8 +120,11 @@ internal sealed unsafe class SettingsWindow
         // Created off-screen at a provisional size, then measured and placed: on a mixed-DPI
         // desktop the owner's scale is not necessarily the scale this window will open at, and
         // the frame around a given client area is itself DPI-dependent.
+        // WS_EX_APPWINDOW: the window is owned by the hidden agent window, and an owned window
+        // otherwise gets no taskbar button - nothing to click to bring it back once it is behind
+        // something else.
         _hwnd = Win32.CreateWindowEx(
-            0, ClassName, "TextFix settings", WindowStyle,
+            WS.EX_APPWINDOW, ClassName, "TextFix settings", WindowStyle,
             -32000, -32000, 400, 300, owner, 0, NativeUi.Instance, 0);
         if (_hwnd == 0)
         {
@@ -123,10 +135,18 @@ internal sealed unsafe class SettingsWindow
 
         _dpi = NativeUi.DpiFor(_hwnd);
         ResizeToDesign();
+        // The DPI read at -32000 is that of whichever monitor is nearest to nowhere. Once the
+        // window sits on the monitor under the pointer, its scale is the one to lay out for.
+        uint placed = NativeUi.DpiFor(_hwnd);
+        if (placed != _dpi)
+        {
+            _dpi = placed;
+            ResizeToDesign();
+        }
         _font = NativeUi.CreateUiFont(_dpi);
         _boldFont = NativeUi.CreateUiFont(_dpi, bold: true);
-        nint icon = NativeUi.LoadAppIcon(32);
-        if (icon != 0) Win32.SendMessage(_hwnd, WM.SETICON, 1, icon);
+        _icon = NativeUi.LoadAppIcon(32);
+        if (_icon != 0) Win32.SendMessage(_hwnd, WM.SETICON, 1, _icon);
 
         BuildControls();
         LoadValues();
@@ -167,7 +187,7 @@ internal sealed unsafe class SettingsWindow
             x = cursor.X - width / 2;
             y = cursor.Y - height / 2;
         }
-        NativeUi.ClampToScreen(ref x, ref y, width, height);
+        NativeUi.ClampToWorkArea(ref x, ref y, width, height);
         Win32.SetWindowPos(_hwnd, 0, x, y, width, height, Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
     }
 
@@ -384,10 +404,14 @@ internal sealed unsafe class SettingsWindow
             int baseId = IdActionBase + i * IdActionStride;
             SetCheck(baseId + IdActionEnabledOffset, action.Enabled);
             SetCheck(baseId + IdActionWholeOffset, action.WholeTextWhenNoSelection);
-            SetText(baseId + IdActionPromptOffset, action.Prompt);
+            // A multiline edit control only breaks lines on CRLF; a prompt with bare LFs, as the
+            // shipped ones and anything written on a Mac have, would show as one long line.
+            SetText(baseId + IdActionPromptOffset, action.Prompt.ReplaceLineEndings("\r\n"));
             HotkeyBinding.TryParse(action.Hotkey, out HotkeyBinding binding);
+            _loadedHotkeys[i] = binding;
+            _loadedHotkeyValues[i] = binding.ToControlValue();
             nint hotkey = Control(baseId + IdActionHotkeyOffset);
-            if (hotkey != 0) Win32.SendMessage(hotkey, HKM_SETHOTKEY, binding.ToControlValue(), 0);
+            if (hotkey != 0) Win32.SendMessage(hotkey, HKM_SETHOTKEY, _loadedHotkeyValues[i], 0);
         }
 
         UpdateEnabledState();
@@ -474,22 +498,33 @@ internal sealed unsafe class SettingsWindow
             int baseId = IdActionBase + i * IdActionStride;
             action.Enabled = GetCheck(baseId + IdActionEnabledOffset);
             action.WholeTextWhenNoSelection = GetCheck(baseId + IdActionWholeOffset);
-            action.Prompt = GetText(baseId + IdActionPromptOffset).Trim();
+            action.Prompt = GetText(baseId + IdActionPromptOffset).ReplaceLineEndings("\n").Trim();
             if (action.Prompt.Length == 0) action.Prompt = i == 0 ? Defaults.FixPrompt : Defaults.RewritePrompt;
 
             nint hotkeyControl = Control(baseId + IdActionHotkeyOffset);
             ushort raw = hotkeyControl == 0 ? (ushort)0 : (ushort)Win32.SendMessage(hotkeyControl, HKM_GETHOTKEY, 0, 0);
-            HotkeyBinding binding = HotkeyBinding.FromControlValue(raw);
+            HotkeyBinding binding = raw == _loadedHotkeyValues[i] && raw != 0
+                ? _loadedHotkeys[i]
+                : HotkeyBinding.FromControlValue(raw);
             if (action.Enabled && binding.IsEmpty)
             {
                 Complain("Give " + action.Name + " a hotkey, or turn it off.");
                 return false;
             }
-            if (!binding.IsEmpty && binding.Modifiers == 0 && !IsSafeUnmodifiedKey(binding.VirtualKey))
+            if (!binding.IsEmpty && (binding.Modifiers & ~Win32.MOD_SHIFT) == 0 && !IsSafeUnmodifiedKey(binding.VirtualKey))
             {
+                // Shift alone counts as no modifier: claiming Shift+A globally breaks typing a
+                // capital A everywhere on the machine.
                 Complain(
-                    binding.Format() + " on its own would be swallowed everywhere on this machine." +
-                    " Add Ctrl, Alt or Shift, or use one of F13-F24.");
+                    binding.Format() + " would be swallowed everywhere on this machine." +
+                    " Add Ctrl or Alt, or use one of F13-F24.");
+                return false;
+            }
+            if (binding.Modifiers == Win32.MOD_CONTROL && IsEditingShortcut(binding.VirtualKey))
+            {
+                // TextFix presses Ctrl+A, Ctrl+C and Ctrl+V itself, and a hotkey on one of them
+                // would set itself off again from its own keystrokes.
+                Complain(binding.Format() + " is a standard editing shortcut. Pick another combination.");
                 return false;
             }
             action.Hotkey = binding.Format();
@@ -508,14 +543,23 @@ internal sealed unsafe class SettingsWindow
         // so it never passes through config.json.
         if (_apiKeyDirty)
         {
-            string typed = GetText(IdApiKey).Trim();
-            if (typed == KeyPlaceholder)
+            string field = GetText(IdApiKey);
+            // Typing or pasting into the field while it shows the saved-key placeholder appends to
+            // the bullets. No key contains one, so they are dropped instead of being saved as the
+            // start of a key that then fails every request.
+            string typed = field.Replace(KeyPlaceholder[0].ToString(), string.Empty, StringComparison.Ordinal).Trim();
+            if (typed.Length == 0 && field.Contains(KeyPlaceholder[0]))
             {
                 // Untouched.
             }
             else if (typed.Length == 0)
             {
-                SecretStore.SetApiKey(_provider, string.Empty); // an emptied field removes the key
+                // An emptied field removes the key.
+                if (!SecretStore.SetApiKey(_provider, string.Empty))
+                {
+                    Complain("Could not remove the stored API key. The log has the details.");
+                    return false;
+                }
             }
             else if (!LooksLikeApiKey(typed))
             {
@@ -527,9 +571,10 @@ internal sealed unsafe class SettingsWindow
                     + " to remove the one you have.");
                 return false;
             }
-            else
+            else if (!SecretStore.SetApiKey(_provider, typed))
             {
-                SecretStore.SetApiKey(_provider, typed);
+                Complain("Could not save the API key. The log has the details.");
+                return false;
             }
         }
         Autostart.SetEnabled(GetCheck(IdAutostart));
@@ -542,6 +587,9 @@ internal sealed unsafe class SettingsWindow
     /// only keys worth claiming globally without a modifier.
     /// </summary>
     private static bool IsSafeUnmodifiedKey(uint vk) => vk is >= 0x7C and <= 0x87;
+
+    /// <summary>Ctrl+A, C, V, X, Y and Z: the shortcuts every text box already uses.</summary>
+    private static bool IsEditingShortcut(uint vk) => vk is 0x41 or 0x43 or 0x56 or 0x58 or 0x59 or 0x5A;
 
     /// <summary>
     /// Deliberately a shape check, not a format check: both providers issue keys in their own
@@ -597,11 +645,19 @@ internal sealed unsafe class SettingsWindow
     [UnmanagedCallersOnly]
     private static nint StaticWndProc(nint hwnd, uint message, nuint wParam, nint lParam)
     {
-        SettingsWindow? self = _instance;
-        if (self != null && (self._hwnd == hwnd || self._hwnd == 0))
+        try
         {
-            nint? handled = self.HandleMessage(hwnd, message, wParam, lParam);
-            if (handled.HasValue) return handled.Value;
+            SettingsWindow? self = _instance;
+            if (self != null && (self._hwnd == hwnd || self._hwnd == 0))
+            {
+                nint? handled = self.HandleMessage(hwnd, message, wParam, lParam);
+                if (handled.HasValue) return handled.Value;
+            }
+        }
+        catch (Exception e)
+        {
+            // An exception leaving an UnmanagedCallersOnly method ends the process on the spot.
+            Log.Error("Settings window: " + AiErrors.Scrub(e.GetType().Name + ": " + e.Message));
         }
         return Win32.DefWindowProc(hwnd, message, wParam, lParam);
     }
@@ -615,8 +671,11 @@ internal sealed unsafe class SettingsWindow
                 return 0;
 
             case WM.CTLCOLORSTATIC:
-                // Static text and checkbox labels sit on the dialog background, not on white.
+                // Static text and checkbox labels sit on the dialog background, not on white. The
+                // text colour is set as well as the background: left alone it stays black, which
+                // a high-contrast theme with a black background turns into invisible text.
                 Win32.SetBkColor((nint)wParam, Win32.GetSysColor(Win32.COLOR_BTNFACE));
+                Win32.SetTextColor((nint)wParam, Win32.GetSysColor(Win32.COLOR_BTNTEXT));
                 return Win32.GetSysColorBrush(Win32.COLOR_BTNFACE);
 
             case WM.CLOSE:
@@ -689,6 +748,11 @@ internal sealed unsafe class SettingsWindow
         {
             Win32.DeleteObject(_boldFont);
             _boldFont = 0;
+        }
+        if (_icon != 0)
+        {
+            Win32.DestroyIcon(_icon);
+            _icon = 0;
         }
         _controls.Clear();
     }

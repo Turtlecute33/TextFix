@@ -17,8 +17,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     private let config: AppConfig
     private let onClosed: (AppConfig?) -> Void
+    private let onRecording: (Bool) -> Void
 
     private var window: NSWindow?
+    /// The app that was in front before this window took focus. Given back on close: an accessory
+    /// app with no windows left stays active otherwise, and the first hotkey press after Save
+    /// would read TextFix itself instead of the user's text.
+    private var previousApp: NSRunningApplication?
     private var provider: AiProvider
     private var models: [ModelEntry] = []
     private var apiKeyDirty = false
@@ -45,8 +50,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     private var accessibilityBanner: NSView?
 
-    init(config: AppConfig, onClosed: @escaping (AppConfig?) -> Void) {
+    init(config: AppConfig, onRecording: @escaping (Bool) -> Void, onClosed: @escaping (AppConfig?) -> Void) {
         self.config = config.copy()
+        self.onRecording = onRecording
         self.onClosed = onClosed
         self.provider = self.config.providerValue
         super.init()
@@ -82,6 +88,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         // An agent normally has no business stealing focus, but the user just asked for this
         // window, so it comes to the front like any other.
+        if let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current {
+            previousApp = front
+        }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         // Only when there is nothing there yet. A field holding a saved key, focused, is one stray
@@ -268,6 +277,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         let hotkey = HotkeyField()
         hotkey.onChange = { [weak self] binding in self?.actionBindings[index] = binding }
         hotkey.onRejected = { [weak self] message in self?.complain(message) }
+        hotkey.onRecordingChanged = { [weak self] recording in self?.onRecording(recording) }
+        // Two fields both called "Hotkey" are indistinguishable to VoiceOver.
+        hotkey.setAccessibilityLabel("\(action.name) hotkey")
         actionHotkey.append(hotkey)
         actionBindings.append(HotkeyBinding.parse(action.hotkey))
 
@@ -282,6 +294,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         stack.addArrangedSubview(Controls.row("Hotkey", hotkeyRow, labelWidth: Self.labelWidth))
 
         let (scroll, text) = Controls.promptEditor()
+        text.setAccessibilityLabel("\(action.name) prompt")
         actionPrompt.append(text)
         scroll.heightAnchor.constraint(equalToConstant: Self.promptHeight).isActive = true
         let promptRow = Controls.row("Prompt", scroll, labelWidth: Self.labelWidth, alignTop: true)
@@ -554,18 +567,28 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         // The API key goes straight to the keychain rather than into the config object, so it never
         // passes through config.json.
         if apiKeyDirty {
-            let typed = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if typed == Self.keyPlaceholder {
+            let field = apiKeyField.stringValue
+            // Typing or pasting into the field while it shows the saved-key placeholder appends to
+            // the bullets. No key contains one, so they are dropped instead of being saved as the
+            // start of a key that then fails every request.
+            let typed = field.replacingOccurrences(of: "•", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if typed.isEmpty && field.contains("•") {
                 // Untouched.
             } else if typed.isEmpty {
-                SecretStore.setApiKey("", for: provider) // an emptied field removes the key
+                // An emptied field removes the key.
+                guard SecretStore.setApiKey("", for: provider) else {
+                    complain("Could not remove the stored API key. The log has the details.")
+                    return nil
+                }
             } else if !Self.looksLikeApiKey(typed) {
                 complain(
                     "That does not look like an API key. Paste the whole key, or clear the field"
                     + " to remove the one you have.")
                 return nil
-            } else {
-                SecretStore.setApiKey(typed, for: provider)
+            } else if !SecretStore.setApiKey(typed, for: provider) {
+                complain("Could not save the API key. The log has the details.")
+                return nil
             }
         }
 
@@ -602,6 +625,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         self.window = nil
         window?.delegate = nil
         window?.orderOut(nil)
+        if let previousApp, !previousApp.isTerminated {
+            previousApp.activate(options: [])
+        }
+        previousApp = nil
         onClosed(result)
     }
 

@@ -1,3 +1,6 @@
 *.sh text eol=lf
 *.swift text eol=lf
 Package.swift text eol=lf
+# LF everywhere, so the prompts compiled into the Windows agent are the same bytes whichever
+# machine built it. The settings window converts to CRLF only for its own edit controls.
+*.cs text eol=lf

@@ -71,6 +71,25 @@ internal static unsafe class NativeUi
         Win32.InitCommonControlsEx(icc);
     }
 
+    /// <summary>
+    /// Keeps a window inside the work area of the monitor its centre is on: never under the
+    /// taskbar, and never in the dead space a virtual desktop of mismatched monitors contains.
+    /// </summary>
+    internal static void ClampToWorkArea(ref int x, ref int y, int width, int height)
+    {
+        nint monitor = Win32.MonitorFromPoint(
+            new POINT { X = x + width / 2, Y = y + height / 2 }, Win32.MONITOR_DEFAULTTONEAREST);
+        var info = new MONITORINFO { cbSize = (uint)sizeof(MONITORINFO) };
+        if (monitor == 0 || !Win32.GetMonitorInfo(monitor, ref info))
+        {
+            ClampToScreen(ref x, ref y, width, height);
+            return;
+        }
+        RECT work = info.rcWork;
+        x = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - width));
+        y = Math.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - height));
+    }
+
     /// <summary>Keeps a rectangle inside the virtual desktop, so an indicator never lands offscreen.</summary>
     internal static void ClampToScreen(ref int x, ref int y, int width, int height)
     {

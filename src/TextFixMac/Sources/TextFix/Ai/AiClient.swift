@@ -54,8 +54,22 @@ enum AiClient {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: RedirectRefuser(), delegateQueue: nil)
     }()
+
+    /// URLSession follows redirects on its own, and a followed 307 or 308 sends the POST body -
+    /// the user's text - to whatever host the response names. Both providers answer at the URL
+    /// they document, so a redirect is refused and reported as the error it is, the same as the
+    /// Windows agent's AllowAutoRedirect = false.
+    private final class RedirectRefuser: NSObject, URLSessionTaskDelegate {
+        func urlSession(
+            _ session: URLSession, task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
 
     /// Small shared state: the last time we touched the provider (so a pre-warm does not fire on
     /// every hotkey press) and the set of models we have already warned about a ZDR downgrade for.
@@ -119,8 +133,8 @@ enum AiClient {
         // A model whose ZDR route we already found missing would otherwise pay for a doomed
         // attempt on every single fix just to rediscover it.
         let zdrSuppressed = zdrWanted && RouteFacts.shared.isZdrKnownUnavailable(req.model)
-        // Report the downgrade even when it comes from the cache rather than a live refusal, so
-        // the user is told on every affected request and not only the first one in 30 minutes.
+        // Reported even when it comes from the cache rather than a live refusal, so the caller
+        // knows about every affected request and not only the first one in 30 minutes.
         var fellBack = zdrSuppressed
         let requestZdr = zdrWanted && !zdrSuppressed
 
@@ -135,11 +149,16 @@ enum AiClient {
 
             for attempt in 0..<maxAttempts {
                 try Task.checkCancellation()
+                let started = Date()
+                func elapsedMs() -> Int { Int(Date().timeIntervalSince(started) * 1000) }
                 do {
-                    return try await perform(
+                    let answer = try await perform(
                         userText: userText, req: req, enforceZdr: zdr,
                         disableReasoning: chatTuningApplies(), deadline: deadline)
+                    Log.debug("Attempt \(attempt + 1) answered in \(elapsedMs()) ms")
+                    return answer
                 } catch let error as AiError {
+                    Log.debug("Attempt \(attempt + 1) failed (status \(error.statusCode)) after \(elapsedMs()) ms")
                     if zdr, req.provider == .openRouter,
                        RouteFacts.isZdrRouteUnavailable(error.statusCode, error.errorBody) {
                         throw AiError(
@@ -147,6 +166,15 @@ enum AiClient {
                             statusCode: error.statusCode,
                             retryAfterMs: error.retryAfterMs,
                             errorBody: error.errorBody)
+                    }
+                    if !zdr, deniesDataCollection(req),
+                       RouteFacts.isZdrRouteUnavailable(error.statusCode, error.errorBody) {
+                        // Deliberately no status code: the 404 behind this would otherwise be
+                        // reported as "model not found", which sends the user looking in the wrong
+                        // place.
+                        throw AiError(
+                            message: "No provider of this model meets your privacy setting. Pick another "
+                                + "model, or turn off zero data retention in settings.")
                     }
                     if !AiStatus.isRetryable(error.statusCode) || attempt == maxAttempts - 1 { throw error }
                     lastError = error
@@ -207,11 +235,13 @@ enum AiClient {
             text = try await attemptWithReasoningFallback(zdr: requestZdr)
         } catch let error as AiError
             where requestZdr && RouteFacts.isZdrRouteUnavailable(error.statusCode, error.errorBody) {
-            // ZDR is a preference, not a hard requirement. Retry once through normal routing so
-            // unsupported, custom or temporarily unavailable ZDR routes do not break the feature.
+            // No zero-retention route. Retry once, but never down to "anything goes": the retry
+            // still refuses every provider that keeps the text to train on (see
+            // deniesDataCollection), and fails rather than go further.
             if RouteFacts.isZdrVerdictCacheable(error.statusCode, error.errorBody) {
                 RouteFacts.shared.markZdrUnavailable(req.model)
             }
+            Log.info("No zero-data-retention route; retrying with data collection denied")
             fellBack = true
             text = try await attemptWithReasoningFallback(zdr: false)
         }
@@ -285,9 +315,11 @@ enum AiClient {
 
         var body: [String: Any] = ["model": req.model, "messages": messages]
         if enforceZdr && req.provider == .openRouter {
-            // Best-effort preference: every enabled OpenRouter request asks for it first, and the
-            // caller retries without it when routing cannot satisfy the constraint.
+            // Asked for first on every enabled OpenRouter request. When routing cannot satisfy it,
+            // the caller retries once with the weaker guarantee below.
             body["provider"] = ["zdr": true]
+        } else if deniesDataCollection(req) {
+            body["provider"] = ["data_collection": "deny"]
         }
         if disableReasoning {
             // temperature is deliberately absent: the shipped default text model answers a
@@ -295,6 +327,13 @@ enum AiClient {
             body["reasoning"] = ["enabled": false]
         }
         return try? JSONSerialization.data(withJSONObject: body, options: [])
+    }
+
+    /// True when the user asked for zero data retention on OpenRouter. A request that goes out
+    /// without the ZDR constraint - because no route offers it - still refuses every provider that
+    /// keeps prompts for training. It never falls further than that.
+    private static func deniesDataCollection(_ req: AiRequest) -> Bool {
+        req.provider == .openRouter && req.useZeroDataRetention
     }
 
     private static func systemMessage(_ prompt: String) -> [String: Any] {
@@ -317,12 +356,36 @@ enum AiClient {
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw unusable("Malformed API response")
         }
+        if let error = root["error"] as? [String: Any], let code = error["code"] as? Int, (400...599).contains(code) {
+            // An error envelope served with a 200. Its own code is the real status, so a 402 or a
+            // 401 reads as what it is instead of being retried as a hiccup.
+            throw AiError(message: "API error: \(code)", statusCode: code, errorBody: responseBody)
+        }
         guard let choices = root["choices"] as? [Any], !choices.isEmpty else {
             // PayPerQ serves {"error": ...} with a 200 when its upstream fails, so an absent
             // choices array is an upstream fault rather than a malformed reply. Either way it is
             // the same transient, retryable condition.
             throw unusable("API response missing choices")
         }
+        let finish = (choices[0] as? [String: Any])?["finish_reason"] as? String
+        Log.debug("Finish reason: \(finish ?? "none")")
+        switch finish {
+        case "length":
+            throw AiError(
+                message: "The answer was cut short, so nothing was changed. Try a shorter text.",
+                statusCode: AiStatus.answerCutShort)
+        case "content_filter":
+            throw AiError(
+                message: "The provider's content filter stopped the answer, so nothing was changed.",
+                statusCode: AiStatus.answerCutShort)
+        case "error":
+            // The upstream failed mid-answer. What came back is partial; asking again usually
+            // clears it.
+            throw unusable("The answer stopped with an error")
+        default:
+            break
+        }
+
         let content = extractMessageText(choices[0])
         if content.isEmpty {
             // Reasoning models sometimes answer with content:null and everything they produced in

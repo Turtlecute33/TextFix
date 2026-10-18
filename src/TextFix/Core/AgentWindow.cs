@@ -59,6 +59,14 @@ internal sealed unsafe class AgentWindow
         Autostart.Reconcile(_config.StartWithWindows);
         Log.Info("Agent started");
 
+        if (_config.LoadFailed)
+        {
+            _tray.ShowBalloon(
+                "Settings not read",
+                "config.json could not be read, so TextFix uses its defaults. The log has the details.",
+                isError: true);
+        }
+
         if (_config.WasCreatedFresh)
         {
             // First run: an agent with no API key can do nothing, so say so up front rather than
@@ -139,11 +147,20 @@ internal sealed unsafe class AgentWindow
     [UnmanagedCallersOnly]
     private static nint StaticWndProc(nint hwnd, uint message, nuint wParam, nint lParam)
     {
-        AgentWindow? self = _instance;
-        if (self != null)
+        try
         {
-            nint? handled = self.HandleMessage(hwnd, message, wParam, lParam);
-            if (handled.HasValue) return handled.Value;
+            AgentWindow? self = _instance;
+            if (self != null)
+            {
+                nint? handled = self.HandleMessage(hwnd, message, wParam, lParam);
+                if (handled.HasValue) return handled.Value;
+            }
+        }
+        catch (Exception e)
+        {
+            // An exception leaving an UnmanagedCallersOnly method ends the process on the spot -
+            // no log line, and no clipboard restore. Keep the agent alive and say what happened.
+            Log.Error("Unhandled in the agent window: " + AiErrors.Scrub(e.GetType().Name + ": " + e.Message));
         }
         return Win32.DefWindowProc(hwnd, message, wParam, lParam);
     }
@@ -198,7 +215,9 @@ internal sealed unsafe class AgentWindow
                 // A clipboard restore still on the timer has to happen here, before the queue is
                 // torn down. GetMessage retrieves WM_QUIT well ahead of WM_TIMER, so a quit inside
                 // the restore delay would drop the restore and leave the user holding our output
-                // instead of whatever they had copied.
+                // instead of whatever they had copied. A request still in flight is cancelled for
+                // the same reason: its capture left the host's copy of the text on the clipboard.
+                _fix?.Cancel();
                 _fix?.FlushPendingRestore();
                 Win32.PostQuitMessage(0);
                 return 0;

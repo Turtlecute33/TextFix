@@ -35,6 +35,15 @@ internal struct RECT
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct MONITORINFO
+{
+    public uint cbSize;
+    public RECT rcMonitor;
+    public RECT rcWork;
+    public uint dwFlags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct MSG
 {
     public nint hwnd;

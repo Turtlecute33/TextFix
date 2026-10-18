@@ -19,10 +19,22 @@ enum LoginItem {
     static func setEnabled(_ enabled: Bool) -> String? {
         do {
             if enabled {
-                guard SMAppService.mainApp.status != .enabled else { return nil }
-                try SMAppService.mainApp.register()
+                switch SMAppService.mainApp.status {
+                case .enabled:
+                    return nil
+                case .requiresApproval:
+                    // Registered, but switched off in System Settings. Registering again changes
+                    // nothing; only the user can switch it back on, and only there.
+                    SMAppService.openSystemSettingsLoginItems()
+                    return "Turn TextFix on under System Settings > General > Login Items."
+                default:
+                    try SMAppService.mainApp.register()
+                }
             } else {
-                guard SMAppService.mainApp.status == .enabled else { return nil }
+                // A registration waiting for approval is removed too, or it would come back the
+                // moment the user approved something else in that list.
+                let status = SMAppService.mainApp.status
+                guard status == .enabled || status == .requiresApproval else { return nil }
                 try SMAppService.mainApp.unregister()
             }
             return nil

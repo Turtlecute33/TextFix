@@ -29,38 +29,52 @@ enum AiStatus {
     /// Retryable, and deliberately not a real HTTP status so nothing can collide with it.
     static let unusableResponse = -2
 
+    /// "HTTP 200, but the answer stopped early" - finish_reason length or content_filter. Pasting
+    /// it would replace the user's whole text with the first part of it, and asking again gets the
+    /// same answer, so it is neither used nor retried.
+    static let answerCutShort = -3
+
     private static let retryable: Set<Int> = [408, 425, 429, 500, 502, 503, 504, unusableResponse]
 
     static func isRetryable(_ statusCode: Int) -> Bool { retryable.contains(statusCode) }
 }
 
 enum AiText {
-    /// Strips control characters and the narrow set of bidi/format marks that corrupt host
-    /// editors, but keeps U+200D (ZWJ) so emoji sequences survive and keeps newline / carriage
-    /// return / tab so the model's line breaks survive - otherwise "end.\nNext" collapses to
-    /// "end.Next", losing both the break and the space after the punctuation.
-    static func sanitize(_ raw: String, maxLength: Int) -> String {
+    /// Strips control characters and the narrow set of invisible marks that corrupt host editors,
+    /// but keeps U+200D (ZWJ) so emoji sequences survive, U+200C (ZWNJ) and the LRM / RLM marks
+    /// because Persian, Kurdish, several Indic scripts and mixed right-to-left text are spelled
+    /// with them, and newline / carriage return / tab so the model's line breaks survive -
+    /// otherwise "end.\nNext" collapses to "end.Next", losing both the break and the space after
+    /// the punctuation.
+    ///
+    /// Nothing is cut to length here. An answer too long to paste is refused by the caller, never
+    /// shortened: a cut answer pasted over the user's text deletes the end of it.
+    static func sanitize(_ raw: String) -> String {
         var out = String.UnicodeScalarView()
         out.reserveCapacity(raw.unicodeScalars.count)
         for scalar in raw.unicodeScalars where !isStripped(scalar) {
             out.append(scalar)
         }
-        let cleaned = String(out).trimmingCharacters(in: .whitespacesAndNewlines)
-        // Measured in UTF-16 code units, which is what the Windows agent's string length is, so
-        // one maxOutputLength in config.json means the same thing on both platforms.
-        if cleaned.utf16.count <= maxLength { return cleaned }
+        return String(out).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
-        // Cut on a grapheme cluster boundary so we never split a surrogate pair, a ZWJ emoji
-        // sequence or a base plus combining mark.
-        var end = cleaned.startIndex
-        var used = 0
-        for character in cleaned {
-            let width = character.utf16.count
-            if used + width > maxLength { break }
-            used += width
-            end = cleaned.index(after: end)
-        }
-        return String(cleaned[..<end])
+    /// The longest answer worth pasting for a text of this length, in UTF-16 code units like every
+    /// other length in config.json. A fix or a rewrite comes back about as long as what went in;
+    /// an answer more than twice that long is a model that went off on its own, and it is refused
+    /// rather than typed over the user's text.
+    static func outputLimit(inputLength: Int) -> Int { max(10_000, inputLength * 2) }
+
+    /// Puts the captured text's own leading and trailing whitespace back around the answer. The
+    /// answer is trimmed, but the capture often is not: a double-clicked word carries its space,
+    /// a triple-clicked paragraph its line break. Without this the next word or paragraph joins
+    /// onto the fixed text.
+    static func keepEdgeWhitespace(original: String, answer: String) -> String {
+        let scalars = original.unicodeScalars
+        guard let first = scalars.firstIndex(where: { !$0.properties.isWhitespace }),
+              let last = scalars.lastIndex(where: { !$0.properties.isWhitespace }) else { return answer }
+        let leading = String(scalars[scalars.startIndex..<first])
+        let trailing = String(scalars[scalars.index(after: last)...])
+        return leading + answer + trailing
     }
 
     /// Recognised placeholders for the captured text inside a prompt. {text} is the documented
@@ -99,9 +113,10 @@ enum AiText {
     }
 
     /// Strips a wrapping tag pair that a model echoed back, which happens when the prompt uses
-    /// tags to delimit the input. Only strips when a matching pair sits at both ends, so text that
-    /// legitimately contains a tag survives untouched.
-    static func unwrap(_ raw: String) -> String {
+    /// tags to delimit the input. Only a tag the prompt itself fences with is stripped - its
+    /// literal name, or a name that the {nonce} expanded into - and only when a matching pair sits
+    /// at both ends, so text that legitimately starts and ends with markup survives untouched.
+    static func unwrap(_ raw: String, prompt: String) -> String {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 7, text.first == "<" else { return raw }
         guard let close = text.firstIndex(of: ">") else { return raw }
@@ -110,10 +125,18 @@ enum AiText {
         let name = text[text.index(after: text.startIndex)..<close]
         guard let first = name.first, first.isASCII, first.isLetter else { return raw }
         guard name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else { return raw }
+        guard isPromptFence(String(name), prompt: prompt) else { return raw }
         let closingTag = "</\(name)>"
         guard text.lowercased().hasSuffix(closingTag.lowercased()) else { return raw }
         let body = text[text.index(after: close)..<text.index(text.endIndex, offsetBy: -closingTag.count)]
         return body.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isPromptFence(_ name: String, prompt: String) -> Bool {
+        if prompt.range(of: "<\(name)>", options: .caseInsensitive) != nil { return true }
+        guard let dash = name.lastIndex(of: "-"), dash > name.startIndex else { return false }
+        let base = name[...dash]
+        return prompt.range(of: "<\(base)\(nonceToken)>", options: .caseInsensitive) != nil
     }
 
     private static func isStripped(_ scalar: Unicode.Scalar) -> Bool {
@@ -122,8 +145,7 @@ enum AiText {
         switch scalar.value {
         case 9, 10, 13: return false
         case 0x00...0x1F, 0x7F...0x9F: return true
-        case 0x200B, 0x200C: return true   // zero width space / non-joiner (U+200D ZWJ is kept)
-        case 0x200E, 0x200F: return true   // left-to-right / right-to-left mark
+        case 0x200B: return true           // zero width space (ZWNJ, ZWJ, LRM and RLM are kept)
         case 0x202A...0x202E: return true  // bidi embedding / override
         case 0x2066...0x2069: return true  // bidi isolates
         case 0xFEFF: return true           // byte order mark

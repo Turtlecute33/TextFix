@@ -108,6 +108,17 @@ internal static unsafe partial class Win32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetForegroundWindow(nint hWnd);
 
+    [LibraryImport(User32, EntryPoint = "AllowSetForegroundWindow", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool AllowSetForegroundWindow(uint dwProcessId);
+
+    [LibraryImport(User32, EntryPoint = "MonitorFromPoint")]
+    internal static partial nint MonitorFromPoint(POINT pt, uint dwFlags);
+
+    [LibraryImport(User32, EntryPoint = "GetMonitorInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetMonitorInfo(nint hMonitor, ref MONITORINFO lpmi);
+
     [LibraryImport(User32, EntryPoint = "GetWindowThreadProcessId")]
     internal static partial uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
@@ -299,6 +310,9 @@ internal static unsafe partial class Win32
     [LibraryImport(Gdi32, EntryPoint = "SetBkColor")]
     internal static partial uint SetBkColor(nint hdc, uint color);
 
+    [LibraryImport(Gdi32, EntryPoint = "SetTextColor")]
+    internal static partial uint SetTextColor(nint hdc, uint color);
+
     // ---- shell ----
 
     [LibraryImport(Shell32, EntryPoint = "Shell_NotifyIconW", SetLastError = true)]
@@ -354,6 +368,9 @@ internal static unsafe partial class Win32
     internal const int COLOR_WINDOW = 5;
     internal const int COLOR_WINDOWTEXT = 8;
     internal const int COLOR_GRAYTEXT = 17;
+    internal const int COLOR_BTNTEXT = 18;
+
+    internal const uint MONITOR_DEFAULTTONEAREST = 2;
 
     internal const uint IMAGE_ICON = 1;
     internal const uint LR_DEFAULTCOLOR = 0;

@@ -85,11 +85,11 @@ enum Keystrokes {
         return sent > 0
     }
 
-    /// Sends Command plus one key, for example Cmd+C, after clearing any modifier the user is
+    /// Sends Command plus one letter, for example Cmd+C, after clearing any modifier the user is
     /// holding. Pass `eventDelayMsOverride` to spread this one chord out further than the
     /// configured default.
     @discardableResult
-    static func sendCommandChord(_ keyCode: Int, eventDelayMsOverride: Int? = nil) -> Bool {
+    static func sendCommandChord(_ letter: Character, eventDelayMsOverride: Int? = nil) -> Bool {
         // Checked before *every* chord rather than once per fix, because a physically held key
         // keeps re-asserting itself: macOS auto-repeats a held modifier, so the modifiers released
         // at the start of a fix are down again by the time a chord goes out a few hundred
@@ -101,8 +101,9 @@ enum Keystrokes {
             Log.warn("Could not create an event source; keyboard input is not permitted")
             return false
         }
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false) else {
+        let keyCode = commandKeyCode(for: letter)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
             lastSendBlocked = true
             return false
         }
@@ -114,6 +115,55 @@ enum Keystrokes {
         if delay > 0 { sleep(ms: delay) }
         up.post(tap: .cghidEventTap)
         return true
+    }
+
+    // ---- keyboard layout ----
+
+    /// Where the letters this file presses sit on a US keyboard, used when the layout cannot be
+    /// read.
+    private static let ansiKeyCodes: [Character: Int] = ["a": kVK_ANSI_A, "c": kVK_ANSI_C, "v": kVK_ANSI_V]
+
+    /// The key that types `letter` with Command held, in the keyboard layout in use right now.
+    ///
+    /// A key code is a position on the keyboard, not a letter, and apps match Cmd shortcuts by the
+    /// letter the layout gives that position. The US positions are wrong on many layouts: on
+    /// French AZERTY the US "A" position types Q, so a select-all sent there is Cmd+Q and quits
+    /// the app; on Dvorak, Cmd+C and Cmd+V land as Cmd+J and Cmd+K. Layouts whose letters are not
+    /// Latin fall back to the ASCII-capable layout macOS itself uses for shortcuts.
+    private static func commandKeyCode(for letter: Character) -> CGKeyCode {
+        let fallback = ansiKeyCodes[letter] ?? 0
+        let sources = [
+            TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+            TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+        ]
+        for case let source? in sources {
+            if let code = keyCode(typing: letter, in: source, preferring: fallback) { return code }
+        }
+        return CGKeyCode(fallback)
+    }
+
+    private static func keyCode(typing letter: Character, in source: TISInputSource, preferring preferred: Int) -> CGKeyCode? {
+        guard let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+        return data.withUnsafeBytes { buffer -> CGKeyCode? in
+            guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return nil }
+            let target = String(letter)
+            func types(_ code: Int) -> Bool {
+                var deadKeys: UInt32 = 0
+                var length = 0
+                var chars = [UniChar](repeating: 0, count: 4)
+                let status = UCKeyTranslate(
+                    layout, UInt16(code), UInt16(kUCKeyActionDown), UInt32((cmdKey >> 8) & 0xFF),
+                    UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysMask),
+                    &deadKeys, chars.count, &length, &chars)
+                return status == noErr && String(utf16CodeUnits: chars, count: length).lowercased() == target
+            }
+            // The US position first: on most layouts it is right, and it is the one the user's
+            // own fingers would use if the two disagreed on a key that types the letter twice.
+            if types(preferred) { return CGKeyCode(preferred) }
+            for code in 0..<128 where code != preferred && types(code) { return CGKeyCode(code) }
+            return nil
+        }
     }
 
     static func sleep(ms: Int) {

@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+using System.Runtime.InteropServices;
 using TextFix.Configuration;
 using TextFix.Core;
 using TextFix.Interop;
+
+// Every DLL this app loads is a system one. Without this, a copy of TextFix.exe run from a
+// Downloads folder would load a same-named DLL planted next to it before the real one.
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 
 namespace TextFix;
 
@@ -19,6 +24,11 @@ internal static class Program
         nint existing = Win32.FindWindow(AgentWindow.ClassName, null);
         if (existing != 0)
         {
+            // This process was just started by the user, so it may hand the foreground to the
+            // running one. Without that, Windows refuses the settings window's SetForegroundWindow
+            // and it opens behind whatever the user was looking at.
+            Win32.GetWindowThreadProcessId(existing, out uint pid);
+            if (pid != 0) Win32.AllowSetForegroundWindow(pid);
             Win32.PostMessage(existing, WM.SHOW_SETTINGS, 0, 0);
             return 0;
         }

@@ -241,6 +241,20 @@ internal static unsafe class CaretPulse
     [UnmanagedCallersOnly]
     private static nint WndProc(nint hwnd, uint message, nuint wParam, nint lParam)
     {
+        try
+        {
+            return HandleMessage(hwnd, message, wParam, lParam);
+        }
+        catch (Exception e)
+        {
+            // An exception leaving an UnmanagedCallersOnly method ends the process on the spot.
+            Log.Error("Indicator: " + e.GetType().Name);
+            return Win32.DefWindowProc(hwnd, message, wParam, lParam);
+        }
+    }
+
+    private static nint HandleMessage(nint hwnd, uint message, nuint wParam, nint lParam)
+    {
         switch (message)
         {
             case WM.PULSE_SHOW:

@@ -51,10 +51,20 @@ final class CaretPulse {
 
         if !visible {
             visible = true
-            panel.alphaValue = 0
-            panel.orderFrontRegardless()
-            Motion.animate(duration: Motion.enterDuration, timing: .easeOut) { _ in
-                panel.animator().alphaValue = 1
+            if sweeping {
+                panel.alphaValue = 0
+                panel.orderFrontRegardless()
+                Motion.animate(duration: Motion.enterDuration, timing: .easeOut) { _ in
+                    panel.animator().alphaValue = 1
+                }
+            } else {
+                // The quiet stage goes up just before a capture that can hold the main thread for
+                // the better part of a second, and a fade needs the run loop to turn - it would
+                // only start once the capture was over. Shown at full opacity and committed now,
+                // so it is on screen while the user is waiting, which is the point of it.
+                panel.alphaValue = 1
+                panel.orderFrontRegardless()
+                CATransaction.flush()
             }
         }
         setSweeping(sweeping)

@@ -95,7 +95,16 @@ internal static class KeyNames
     private static readonly Dictionary<string, uint> ByName = Build();
     private static readonly Dictionary<uint, string> ByKey = Invert(ByName);
 
-    internal static bool TryGetVirtualKey(string lowerName, out uint vk) => ByName.TryGetValue(lowerName, out vk);
+    internal static bool TryGetVirtualKey(string lowerName, out uint vk)
+    {
+        if (ByName.TryGetValue(lowerName, out vk)) return true;
+        // The form GetName writes for a key with no name here - the ISO <> key on many European
+        // keyboards, OEM keys, media keys - so that a binding saved that way loads back.
+        return lowerName.StartsWith("0x", StringComparison.Ordinal)
+            && uint.TryParse(lowerName.AsSpan(2), System.Globalization.NumberStyles.AllowHexSpecifier,
+                System.Globalization.CultureInfo.InvariantCulture, out vk)
+            && vk is > 0 and <= 0xFE;
+    }
 
     internal static string GetName(uint vk) => ByKey.TryGetValue(vk, out string? name) ? name : "0x" + vk.ToString("X2");
 

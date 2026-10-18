@@ -28,9 +28,14 @@ final class TextCapture {
     /// The range the text occupies, when AX told us. Needed to re-select the whole field before a
     /// paste, since the AX read never selected anything.
     let fullRange: CFRange?
+    /// The pasteboard as it was before the capture borrowed it. Nil on the Accessibility path,
+    /// which borrows nothing: there the snapshot is taken just before a paste, if one happens.
     let saved: PasteboardSnapshot?
     /// Quartz screen coordinates (origin top-left), or nil when the host publishes no caret.
     let caretRect: CGRect?
+    /// `changeCount` once the capture was done. Anything else on the pasteboard by the time the
+    /// request comes back was put there by someone else - most likely the user.
+    let pasteboardCount: Int
 
     init(text: String, mode: CaptureMode, source: CaptureSource, element: AXUIElement?,
          appPid: pid_t, fullRange: CFRange?, saved: PasteboardSnapshot?, caretRect: CGRect?) {
@@ -42,12 +47,17 @@ final class TextCapture {
         self.fullRange = fullRange
         self.saved = saved
         self.caretRect = caretRect
+        self.pasteboardCount = PasteboardBridge.changeCount
     }
 }
 
 enum ReplaceOutcome {
     case replaced
+    /// Focus moved, or the text under it changed, while the request was out.
     case focusChanged
+    /// The app took the Accessibility write but did not confirm it in time. It may still land, so
+    /// a paste on top of it could insert the text twice.
+    case unconfirmed
     /// macOS refused to let us post events or write the element: Accessibility permission.
     case blocked
     case failed
@@ -110,6 +120,18 @@ enum TextTarget {
         }
         let pid = frontmost.processIdentifier
 
+        // The hotkeys stay registered while the settings window is open, so a press there would
+        // otherwise send TextFix's own prompt or model field off to be rewritten.
+        guard pid != ProcessInfo.processInfo.processIdentifier else {
+            return .failed("Switch to the app with your text first.")
+        }
+
+        if let bundle = frontmost.bundleIdentifier, terminalBundles.contains(bundle) {
+            // A terminal publishes its whole scrollback as the field's value - output, paths,
+            // tokens - and pasting back into it types into the shell.
+            return .failed("TextFix does not work in terminal windows.")
+        }
+
         guard isTrusted else {
             return .failed("TextFix needs Accessibility permission to read the text.")
         }
@@ -123,23 +145,29 @@ enum TextTarget {
             caretRect(element: $0, range: Ax.range($0, kAXSelectedTextRangeAttribute))
         })
 
-        // Taken before the read, not inside the path that borrows the pasteboard, because the
-        // Accessibility read borrows nothing and the *replace* still pastes: without this the
-        // fixed text would be left sitting on the user's clipboard on the fast path. Restoring is
-        // free when nothing touched it - PasteboardSnapshot carries the change count.
-        let saved = options.takeSnapshot ? PasteboardBridge.snapshot() : nil
-
-        // Fast path: ask the element directly.
+        // Fast path: ask the element directly. It borrows nothing, so it snapshots nothing: the
+        // replace takes its own snapshot just before it pastes, which also means a copy the user
+        // makes while the request is out is what they get back.
         if options.useAccessibilityRead, let element,
-           let capture = captureViaAccessibility(element: element, pid: pid, options: options, saved: saved) {
+           let capture = captureViaAccessibility(element: element, pid: pid, options: options) {
             return .captured(capture)
         }
 
+        // Taken before the probe overwrites the pasteboard. This path cannot work without
+        // borrowing it.
+        let saved = options.takeSnapshot ? PasteboardBridge.snapshot() : nil
         return capturePasteboard(element: element, pid: pid, options: options, saved: saved)
     }
 
+    /// Terminal emulators, by bundle identifier.
+    private static let terminalBundles: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "dev.warp.Warp",
+        "net.kovidgoyal.kitty", "org.alacritty", "io.alacritty", "com.github.wez.wezterm",
+        "co.zeit.hyper", "com.mitchellh.ghostty", "org.tabby",
+    ]
+
     private static func captureViaAccessibility(
-        element: AXUIElement, pid: pid_t, options: CaptureOptions, saved: PasteboardSnapshot?
+        element: AXUIElement, pid: pid_t, options: CaptureOptions
     ) -> TextCapture? {
         // An element that answers neither of these is not a text control we can work with, and
         // falling through to the pasteboard probe is the right answer for it.
@@ -150,7 +178,7 @@ enum TextTarget {
             Log.debug("AX read: \(selected.count) selected characters")
             return TextCapture(
                 text: selected, mode: .selection, source: .accessibility, element: element,
-                appPid: pid, fullRange: selectedRange, saved: saved,
+                appPid: pid, fullRange: selectedRange, saved: nil,
                 caretRect: caretRect(element: element, range: selectedRange))
         }
 
@@ -164,7 +192,7 @@ enum TextTarget {
         Log.debug("AX read: whole field, \(whole.count) characters")
         return TextCapture(
             text: whole, mode: .wholeText, source: .accessibility, element: element,
-            appPid: pid, fullRange: CFRange(location: 0, length: length), saved: saved,
+            appPid: pid, fullRange: CFRange(location: 0, length: length), saved: nil,
             caretRect: caretRect(element: element, range: selectedRange))
     }
 
@@ -205,7 +233,7 @@ enum TextTarget {
         }
         let baseline = PasteboardBridge.changeCount
 
-        guard Keystrokes.sendCommandChord(kVK_ANSI_C) else {
+        guard Keystrokes.sendCommandChord("c") else {
             return cleanup("Could not send keys to that app. Check Accessibility permission.")
         }
 
@@ -213,7 +241,10 @@ enum TextTarget {
         var text = PasteboardBridge.waitForCopy(
             marker: marker, baseline: baseline, timeoutMs: options.selectionProbeMs,
             maxUTF16: options.maxUTF16)
-        Log.debug("Selection probe: \(text == nil ? "nothing selected" : "\(text!.count) characters")")
+        // Read into a constant first: the log message is built later, on the log queue, and must
+        // not read a variable this function goes on to change.
+        let probeLength = text?.count
+        Log.debug("Selection probe: \(probeLength.map { "\($0) characters" } ?? "nothing selected")")
 
         if text == nil || text!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard options.allowSelectAll else { return cleanup("Nothing is selected.") }
@@ -223,14 +254,14 @@ enum TextTarget {
             // asks for its result, or an app that handles both chords in one batch answers from the
             // pre-selection state.
             func readWholeField(settleMs: Int, chordDelayMs: Int?) -> String? {
-                guard Keystrokes.sendCommandChord(kVK_ANSI_A, eventDelayMsOverride: chordDelayMs) else { return nil }
+                guard Keystrokes.sendCommandChord("a", eventDelayMsOverride: chordDelayMs) else { return nil }
                 Keystrokes.sleep(ms: settleMs)
 
                 let nextMarker = PasteboardBridge.newProbeMarker()
                 probeMarker = nextMarker
                 guard PasteboardBridge.setText(nextMarker, transient: true, concealed: true) else { return nil }
                 let mark = PasteboardBridge.changeCount
-                guard Keystrokes.sendCommandChord(kVK_ANSI_C, eventDelayMsOverride: chordDelayMs) else { return nil }
+                guard Keystrokes.sendCommandChord("c", eventDelayMsOverride: chordDelayMs) else { return nil }
                 return PasteboardBridge.waitForCopy(
                     marker: nextMarker, baseline: mark, timeoutMs: options.copyTimeoutMs,
                     maxUTF16: options.maxUTF16)
@@ -264,8 +295,12 @@ enum TextTarget {
 
     // ---- replace ----
 
+    /// - Parameter beforePaste: called once, just before the pasteboard is borrowed for a paste,
+    ///   and not at all when the text goes back without one. The caller's chance to snapshot what
+    ///   the user is holding at that moment.
     static func replace(
-        capture: TextCapture, with replacement: String, requireSameFocus: Bool, mode: ReplaceMode
+        capture: TextCapture, with replacement: String, requireSameFocus: Bool, mode: ReplaceMode,
+        beforePaste: () -> Void
     ) -> ReplaceOutcome {
         if requireSameFocus {
             guard let frontmost = NSWorkspace.shared.frontmostApplication,
@@ -277,28 +312,49 @@ enum TextTarget {
                     return .focusChanged
                 }
             }
+            // Same field is not enough. A click elsewhere in it while the request was out moves
+            // the selection, and a paste would then insert the fix there and keep the original;
+            // typing during the wait changes the text a whole-field replace would write over.
+            if capture.source == .accessibility, let element = capture.element {
+                let current = capture.mode == .selection
+                    ? Ax.string(element, kAXSelectedTextAttribute)
+                    : Ax.string(element, kAXValueAttribute)
+                if let current, current != capture.text {
+                    Log.debug("The text under the caret changed during the request")
+                    return .focusChanged
+                }
+            }
         }
 
         if mode == .accessibility, let element = capture.element, capture.source == .accessibility {
-            if replaceViaAccessibility(element: element, capture: capture, replacement: replacement) {
+            switch replaceViaAccessibility(element: element, capture: capture, replacement: replacement) {
+            case .success:
                 return .replaced
+            case .cannotComplete:
+                // The app did not answer in time, which is not the same as refusing: the write
+                // may still land, and a paste on top of it would put the text in twice.
+                return .unconfirmed
+            default:
+                Log.debug("Accessibility write was refused; falling back to a paste")
             }
-            Log.debug("Accessibility write was refused; falling back to a paste")
         }
 
-        return replaceViaPaste(capture: capture, replacement: replacement)
+        return replaceViaPaste(capture: capture, replacement: replacement, beforePaste: beforePaste)
     }
 
     private static func replaceViaAccessibility(
         element: AXUIElement, capture: TextCapture, replacement: String
-    ) -> Bool {
+    ) -> AXError {
         if capture.mode == .wholeText, let range = capture.fullRange {
-            guard Ax.setRange(element, kAXSelectedTextRangeAttribute, range) else { return false }
+            guard Ax.setRange(element, kAXSelectedTextRangeAttribute, range) else { return .failure }
         }
-        return Ax.setString(element, kAXSelectedTextAttribute, replacement)
+        return AXUIElementSetAttributeValue(
+            element, kAXSelectedTextAttribute as CFString, replacement as CFString)
     }
 
-    private static func replaceViaPaste(capture: TextCapture, replacement: String) -> ReplaceOutcome {
+    private static func replaceViaPaste(
+        capture: TextCapture, replacement: String, beforePaste: () -> Void
+    ) -> ReplaceOutcome {
         // A whole-field capture read through AX never selected anything, so a bare Cmd+V would
         // insert at the caret and leave the original text in place. Select the field first - a pure
         // selection change, which costs the user no undo step.
@@ -309,17 +365,18 @@ enum TextTarget {
             }
             if !selected {
                 Keystrokes.clearSendBlocked()
-                guard Keystrokes.sendCommandChord(kVK_ANSI_A) else {
+                guard Keystrokes.sendCommandChord("a") else {
                     return Keystrokes.lastSendBlocked ? .blocked : .failed
                 }
                 Keystrokes.sleep(ms: Keystrokes.chordSettleMs)
             }
         }
 
+        beforePaste()
         guard PasteboardBridge.setText(replacement, transient: true) else { return .failed }
 
         Keystrokes.clearSendBlocked()
-        guard Keystrokes.sendCommandChord(kVK_ANSI_V) else {
+        guard Keystrokes.sendCommandChord("v") else {
             return Keystrokes.lastSendBlocked ? .blocked : .failed
         }
         // CGEvent.post has no return value, so a permission revoked since the capture would

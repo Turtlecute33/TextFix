@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 using System.Collections.Concurrent;
-using System.Globalization;
 
 namespace TextFix.Ai;
 
@@ -29,6 +28,13 @@ internal static class AiStatus
     /// </summary>
     internal const int UnusableResponse = -2;
 
+    /// <summary>
+    /// "HTTP 200, but the answer stopped early" - finish_reason length or content_filter. Pasting
+    /// it would replace the user's whole text with the first part of it, and asking again gets the
+    /// same answer, so it is neither used nor retried.
+    /// </summary>
+    internal const int AnswerCutShort = -3;
+
     private static readonly int[] Retryable = [408, 425, 429, 500, 502, 503, 504, UnusableResponse];
 
     internal static bool IsRetryable(int statusCode) => Array.IndexOf(Retryable, statusCode) >= 0;
@@ -37,12 +43,17 @@ internal static class AiStatus
 internal static class AiText
 {
     /// <summary>
-    /// Strips control characters and the narrow set of bidi/format marks that corrupt host
-    /// editors, but keeps U+200D (ZWJ) so emoji sequences survive and keeps newline / carriage
-    /// return / tab so the model's line breaks survive - otherwise "end.\nNext" collapses to
-    /// "end.Next", losing both the break and the space after the punctuation.
+    /// Strips control characters and the narrow set of invisible marks that corrupt host editors,
+    /// but keeps U+200D (ZWJ) so emoji sequences survive, U+200C (ZWNJ) and the LRM / RLM marks
+    /// because Persian, Kurdish, several Indic scripts and mixed right-to-left text are spelled
+    /// with them, and newline / carriage return / tab so the model's line breaks survive -
+    /// otherwise "end.\nNext" collapses to "end.Next", losing both the break and the space after
+    /// the punctuation.
+    ///
+    /// Nothing is cut to length here. An answer too long to paste is refused by the caller, never
+    /// shortened: a cut answer pasted over the user's text deletes the end of it.
     /// </summary>
-    internal static string Sanitize(string raw, int maxLength)
+    internal static string Sanitize(string raw)
     {
         var sb = new System.Text.StringBuilder(raw.Length);
         foreach (char c in raw)
@@ -50,20 +61,30 @@ internal static class AiText
             if (IsStripped(c)) continue;
             sb.Append(c);
         }
-        string cleaned = sb.ToString().Trim();
-        if (cleaned.Length <= maxLength) return cleaned;
+        return sb.ToString().Trim();
+    }
 
-        // Cut on a grapheme cluster boundary so we never split a surrogate pair, a ZWJ emoji
-        // sequence or a base+combining-mark cluster. .NET's text-element segmenter keeps ZWJ
-        // sequences whole, so no extra repair pass is needed here.
-        int end = 0;
-        while (end < cleaned.Length)
-        {
-            int len = StringInfo.GetNextTextElementLength(cleaned.AsSpan(end));
-            if (len <= 0 || end + len > maxLength) break;
-            end += len;
-        }
-        return cleaned[..end];
+    /// <summary>
+    /// The longest answer worth pasting for a text of this length. A fix or a rewrite comes back
+    /// about as long as what went in; an answer more than twice that long is a model that went
+    /// off on its own, and it is refused rather than typed over the user's text.
+    /// </summary>
+    internal static int OutputLimit(int inputLength) => Math.Max(10_000, inputLength * 2);
+
+    /// <summary>
+    /// Puts the captured text's own leading and trailing whitespace back around the answer. The
+    /// answer is trimmed, but the capture often is not: a double-clicked word carries its space,
+    /// a triple-clicked paragraph its line break. Without this the next word or paragraph joins
+    /// onto the fixed text.
+    /// </summary>
+    internal static string KeepEdgeWhitespace(string original, string answer)
+    {
+        int start = 0;
+        while (start < original.Length && char.IsWhiteSpace(original[start])) start++;
+        if (start == original.Length) return answer;
+        int end = original.Length;
+        while (end > start && char.IsWhiteSpace(original[end - 1])) end--;
+        return string.Concat(original.AsSpan(0, start), answer, original.AsSpan(end));
     }
 
     /// <summary>
@@ -111,10 +132,11 @@ internal static class AiText
 
     /// <summary>
     /// Strips a wrapping tag pair that a model echoed back, which happens when the prompt uses
-    /// tags to delimit the input. Only strips when a matching pair sits at both ends, so text that
-    /// legitimately contains a tag survives untouched.
+    /// tags to delimit the input. Only a tag the prompt itself fences with is stripped - its
+    /// literal name, or a name that the {nonce} expanded into - and only when a matching pair sits
+    /// at both ends, so text that legitimately starts and ends with markup survives untouched.
     /// </summary>
-    internal static string Unwrap(string raw)
+    internal static string Unwrap(string raw, string prompt)
     {
         string text = raw.Trim();
         if (text.Length < 7 || text[0] != '<') return raw;
@@ -129,9 +151,18 @@ internal static class AiText
         {
             if (!char.IsAsciiLetterOrDigit(c) && c != '-') return raw;
         }
+        if (!IsPromptFence(name, prompt)) return raw;
         string closingTag = "</" + name + ">";
         if (!text.EndsWith(closingTag, StringComparison.OrdinalIgnoreCase)) return raw;
         return text[(close + 1)..^closingTag.Length].Trim();
+    }
+
+    private static bool IsPromptFence(string name, string prompt)
+    {
+        if (prompt.Contains("<" + name + ">", StringComparison.OrdinalIgnoreCase)) return true;
+        int dash = name.LastIndexOf('-');
+        return dash > 0
+            && prompt.Contains("<" + name[..(dash + 1)] + NonceToken + ">", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsStripped(char c)
@@ -142,10 +173,7 @@ internal static class AiText
         if (char.IsControl(c)) return true;
         return (int)c switch
         {
-            0x200B => true,             // zero width space
-            0x200C => true,             // zero width non-joiner (U+200D ZWJ is deliberately kept)
-            0x200E => true,             // left-to-right mark
-            0x200F => true,             // right-to-left mark
+            0x200B => true,             // zero width space (ZWNJ, ZWJ, LRM and RLM are kept)
             >= 0x202A and <= 0x202E => true, // bidi embedding / override
             >= 0x2066 and <= 0x2069 => true, // bidi isolates
             0xFEFF => true,             // byte order mark

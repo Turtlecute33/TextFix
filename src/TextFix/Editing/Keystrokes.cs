@@ -92,16 +92,38 @@ internal static unsafe class Keystrokes
             KeyEvent(VK.CONTROL, up: true),
         ];
         int delay = eventDelayMsOverride ?? KeyEventDelayMs;
-        if (delay <= 0) return Send(chord);
+        if (delay <= 0)
+        {
+            if (Send(chord)) return true;
+            ReleaseControl();
+            return false;
+        }
 
         Span<INPUT> single = stackalloc INPUT[1];
         for (int i = 0; i < chord.Length; i++)
         {
             single[0] = chord[i];
-            if (!Send(single)) return false;
+            if (!Send(single))
+            {
+                if (i > 0) ReleaseControl();
+                return false;
+            }
             if (i < chord.Length - 1) Thread.Sleep(delay);
         }
         return true;
+    }
+
+    /// <summary>
+    /// A chord that failed part-way may have left Ctrl down, and every key the user types after
+    /// that would arrive as a shortcut. Best effort: if the desktop refused the chord it may
+    /// refuse this too, and there is nothing further to try.
+    /// </summary>
+    private static void ReleaseControl()
+    {
+        bool blocked = LastSendBlocked;
+        Span<INPUT> up = [KeyEvent(VK.CONTROL, up: true)];
+        Send(up);
+        LastSendBlocked = blocked;
     }
 
     private static INPUT KeyEvent(ushort vk, bool up)

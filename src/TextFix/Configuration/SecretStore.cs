@@ -63,11 +63,23 @@ internal static class SecretStore
 
     internal static bool HasApiKey(AiProvider provider) => GetApiKey(provider).Length > 0;
 
-    internal static void SetApiKey(AiProvider provider, string apiKey)
+    /// <summary>Stores or, given an empty key, removes the key. False when it could not.</summary>
+    internal static bool SetApiKey(AiProvider provider, string apiKey)
     {
         try
         {
-            Dictionary<string, string> all = ReadAll();
+            Dictionary<string, string> all;
+            try
+            {
+                all = ReadAll();
+            }
+            catch (Exception e) when (e is JsonException or FormatException)
+            {
+                // A damaged file holds nothing that can still be decrypted. Starting over is the
+                // only way the user can get a key stored again.
+                Log.Warn("secrets.dat was unreadable (" + e.GetType().Name + "); replacing it");
+                all = new Dictionary<string, string>(StringComparer.Ordinal);
+            }
             string trimmed = apiKey.Trim();
             if (trimmed.Length == 0)
             {
@@ -88,7 +100,7 @@ internal static class SecretStore
                 if (cipher == null)
                 {
                     Log.Warn("DPAPI refused to encrypt the API key; it was not saved");
-                    return;
+                    return false;
                 }
                 all[KeyFor(provider)] = Convert.ToBase64String(cipher);
             }
@@ -97,10 +109,12 @@ internal static class SecretStore
             string temp = FilePath + ".tmp";
             File.WriteAllText(temp, json);
             File.Move(temp, FilePath, overwrite: true);
+            return true;
         }
         catch (Exception e)
         {
             Log.Warn("Could not save API key: " + e.GetType().Name);
+            return false;
         }
     }
 
@@ -143,7 +157,7 @@ internal static class SecretStore
         }
     }
 
-    private static byte[] CopyAndFree(DATA_BLOB blob)
+    private static unsafe byte[] CopyAndFree(DATA_BLOB blob)
     {
         try
         {
@@ -153,7 +167,13 @@ internal static class SecretStore
         }
         finally
         {
-            if (blob.pbData != 0) Win32.LocalFree(blob.pbData);
+            if (blob.pbData != 0)
+            {
+                // After a decrypt this buffer is the key in plain text. LocalFree does not clear
+                // it, so it is cleared here before it goes back to the heap.
+                new Span<byte>((void*)blob.pbData, (int)blob.cbData).Clear();
+                Win32.LocalFree(blob.pbData);
+            }
         }
     }
 }

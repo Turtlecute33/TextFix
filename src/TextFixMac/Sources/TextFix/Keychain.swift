@@ -47,9 +47,21 @@ enum SecretStore {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    static func hasApiKey(for provider: AiProvider) -> Bool { !apiKey(for: provider).isEmpty }
+    /// Asks whether a key is stored without reading it. Reading the secret is what makes the
+    /// keychain ask for the login password when the app's signature has changed - after every
+    /// update of an ad-hoc signed build - and this runs at launch and whenever settings open,
+    /// where a password prompt with no context is the last thing the user expects.
+    static func hasApiKey(for provider: AiProvider) -> Bool {
+        var query = baseQuery(provider)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
+    }
 
-    static func setApiKey(_ key: String, for provider: AiProvider) {
+    /// Stores or, given an empty key, removes the key. False when the keychain refused.
+    @discardableResult
+    static func setApiKey(_ key: String, for provider: AiProvider) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = baseQuery(provider)
 
@@ -57,11 +69,12 @@ enum SecretStore {
             let status = SecItemDelete(query as CFDictionary)
             if status != errSecSuccess && status != errSecItemNotFound {
                 Log.warn("Could not remove the stored API key (OSStatus \(status))")
+                return false
             }
-            return
+            return true
         }
 
-        guard let data = trimmed.data(using: .utf8) else { return }
+        guard let data = trimmed.data(using: .utf8) else { return false }
         let update: [String: Any] = [kSecValueData as String: data]
         var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
@@ -76,6 +89,8 @@ enum SecretStore {
         }
         if status != errSecSuccess {
             Log.warn("Could not save the API key (OSStatus \(status))")
+            return false
         }
+        return true
     }
 }

@@ -21,6 +21,12 @@ internal sealed class TextCapture
     internal required nint Focus { get; init; }
     internal ClipboardSnapshot? Saved { get; init; }
     internal RECT CaretRect { get; init; }
+
+    /// <summary>
+    /// The clipboard sequence number once the capture was done. Anything else on the clipboard by
+    /// the time the request comes back was put there by someone else - most likely the user.
+    /// </summary>
+    internal uint ClipboardSequence { get; init; }
 }
 
 internal enum ReplaceOutcome
@@ -115,7 +121,26 @@ internal static unsafe class TextTarget
             return false;
         }
 
-        ClipboardSnapshot? saved = options.TakeSnapshot ? ClipboardBridge.Snapshot(owner) : null;
+        if (IsTerminal(foreground))
+        {
+            // Ctrl+C in a console is an interrupt, not a copy: with nothing selected the probe
+            // would stop whatever the user has running, and the whole-field read would send it
+            // twice more.
+            error = "TextFix does not work in terminal windows.";
+            return false;
+        }
+
+        ClipboardSnapshot? saved = null;
+        if (options.TakeSnapshot)
+        {
+            saved = ClipboardBridge.Snapshot(owner);
+            if (saved == null)
+            {
+                // Going on would put the probe marker over a clipboard there is no copy of.
+                error = "Could not use the clipboard. Another app may be holding it.";
+                return false;
+            }
+        }
         string? probeMarker = null;
 
         // Every failure below happens after the clipboard has been overwritten with a probe
@@ -215,6 +240,7 @@ internal static unsafe class TextTarget
             Focus = focus,
             Saved = saved,
             CaretRect = caret,
+            ClipboardSequence = ClipboardBridge.SequenceNumber(),
         };
         return true;
     }
@@ -238,6 +264,26 @@ internal static unsafe class TextTarget
             return Keystrokes.LastSendBlocked ? ReplaceOutcome.Blocked : ReplaceOutcome.Failed;
         }
         return ReplaceOutcome.Pasted;
+    }
+
+    /// <summary>
+    /// Console hosts and the terminal emulators people commonly run on Windows, by the class name
+    /// of their top-level window.
+    /// </summary>
+    private static readonly string[] TerminalClasses =
+    [
+        "ConsoleWindowClass",               // conhost
+        "CASCADIA_HOSTING_WINDOW_CLASS",    // Windows Terminal
+        "mintty",                           // Git Bash, Cygwin, MSYS2
+        "PuTTY",
+        "KiTTY",
+        "VirtualConsoleClass",              // ConEmu, Cmder
+    ];
+
+    private static bool IsTerminal(nint foreground)
+    {
+        string className = Win32.GetClassNameValue(foreground);
+        return Array.Exists(TerminalClasses, name => name.Equals(className, StringComparison.Ordinal));
     }
 
     /// <summary>

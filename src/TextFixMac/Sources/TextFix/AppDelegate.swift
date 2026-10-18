@@ -50,6 +50,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyConfig()
         Log.info("Agent started")
 
+        if config.loadFailed {
+            Toast.shared.show(
+                title: "Settings not read",
+                message: "config.json could not be read, so TextFix uses its defaults. The log has the details.",
+                isError: true)
+        }
+
         if config.wasCreatedFresh {
             // First run: an agent with no API key can do nothing, so say so up front rather than
             // waiting for the user to press a hotkey and get an error.
@@ -157,10 +164,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         // A registered hotkey never reaches a window, so the recorder could not capture the
-        // combination the user is already using. Release them while the window is open.
-        hotkeys.unregisterAll()
-
-        settings = SettingsWindowController(config: config) { [weak self] saved in
+        // combination the user is already using. They are released while a hotkey field is
+        // recording, and only then: a settings window left open behind other apps must not leave
+        // the hotkeys dead with nothing to say why.
+        settings = SettingsWindowController(config: config, onRecording: { [weak self] recording in
+            guard let self else { return }
+            if recording { self.hotkeys.unregisterAll() } else { self.registerHotkeys() }
+        }) { [weak self] saved in
             guard let self else { return }
             self.settings = nil
             if let saved {

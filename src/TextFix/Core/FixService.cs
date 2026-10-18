@@ -51,6 +51,7 @@ internal sealed class FixService
     // Handed from the request thread to the message thread, read only after the completion
     // message for the matching token arrives.
     private TextCapture? _capture;
+    private string _prompt = string.Empty;
     private volatile string? _resultText;
     private volatile string? _errorText;
     private volatile string? _zdrFallbackModel;
@@ -151,12 +152,13 @@ internal sealed class FixService
         if (capture.Text.Length > config.MaxInputLength)
         {
             HideIndicator();
-            RestoreClipboardNow(capture.Saved);
+            RestoreAfterCapture(capture);
             Notify("Too much text", "That is more than " + config.MaxInputLength + " characters.", isError: true);
             return;
         }
 
         _capture = capture;
+        _prompt = string.IsNullOrWhiteSpace(action.Prompt) ? Defaults.FixPrompt : action.Prompt.Trim();
         _resultText = null;
         _errorText = null;
         _zdrFallbackModel = null;
@@ -180,7 +182,7 @@ internal sealed class FixService
         var request = new AiRequest(
             ApiKey: apiKey,
             Model: model,
-            SystemPrompt: string.IsNullOrWhiteSpace(action.Prompt) ? Defaults.FixPrompt : action.Prompt.Trim(),
+            SystemPrompt: _prompt,
             Provider: provider,
             UseZeroDataRetention: config.ZeroDataRetention,
             DisableReasoning: !config.AllowReasoning,
@@ -227,7 +229,7 @@ internal sealed class FixService
         // so this should find nothing. It is here so the invariant survives a future edit that
         // reorders the two.
         FlushPendingRestore();
-        RestoreClipboardNow(_capture?.Saved);
+        RestoreAfterCapture(_capture);
         _capture = null;
     }
 
@@ -248,54 +250,76 @@ internal sealed class FixService
         {
             Notify(
                 "Zero data retention unavailable",
-                "This request used standard routing for " + fallbackModel + ".",
+                "No zero-retention route for " + fallbackModel + ". TextFix used a provider that does not keep your text for training.",
                 isError: false);
         }
 
         if (_errorText is string error)
         {
-            RestoreClipboardNow(capture?.Saved);
+            RestoreAfterCapture(capture);
             Notify("Text fix failed", error, isError: true);
             return;
         }
         if (_resultText == null || capture == null)
         {
             // Cancelled between the post and here.
-            RestoreClipboardNow(capture?.Saved);
+            RestoreAfterCapture(capture);
             return;
         }
 
         // Unwrap first: a prompt that fences its input in tags sometimes gets tags back.
-        string proposed = AiText.Sanitize(AiText.Unwrap(_resultText), Defaults.MaxOutputLength);
+        string answer = AiText.Sanitize(AiText.Unwrap(_resultText, _prompt));
         _resultText = null;
-        if (proposed.Length == 0)
+        if (answer.Length == 0)
         {
-            RestoreClipboardNow(capture.Saved);
+            RestoreAfterCapture(capture);
             Notify("Text fix failed", "The model returned nothing usable.", isError: true);
             return;
         }
+        if (answer.Length > AiText.OutputLimit(capture.Text.Length))
+        {
+            // Refused, never cut: a shortened answer pasted over the field deletes its end.
+            RestoreAfterCapture(capture);
+            Notify("Text fix failed", "The answer was much longer than your text, so nothing was changed.", isError: true);
+            return;
+        }
+        // CF_UNICODETEXT is CRLF by convention, and classic edit controls show a bare LF as
+        // nothing at all, running the paragraphs together. A capture that itself came back with
+        // bare LFs is from a host that uses them, and gets them back.
+        bool lfOnly = capture.Text.Contains('\n') && !capture.Text.Contains("\r\n", StringComparison.Ordinal);
+        if (!lfOnly) answer = answer.ReplaceLineEndings("\r\n");
+        string proposed = AiText.KeepEdgeWhitespace(capture.Text, answer);
         if (string.Equals(proposed, capture.Text, StringComparison.Ordinal))
         {
             // Nothing to change. Pasting identical text would still cost the user an undo step
-            // and a scroll jump, so leave the field alone.
-            RestoreClipboardNow(capture.Saved);
-            Log.Debug("Model returned the input unchanged; field left untouched");
+            // and a scroll jump, so leave the field alone - but say so, or the hotkey looks dead.
+            RestoreAfterCapture(capture);
+            Notify("No changes needed", "The text is already fine as it is.", isError: false);
             return;
+        }
+
+        // Something new on the clipboard since the capture is most likely the user copying while
+        // the request was out. That is what they are holding now, so that is what comes back
+        // after the paste, not the older snapshot.
+        ClipboardSnapshot? restoreTo = capture.Saved;
+        if (restoreTo != null && ClipboardBridge.SequenceNumber() != capture.ClipboardSequence)
+        {
+            restoreTo = ClipboardBridge.Snapshot(_hwnd) ?? restoreTo;
         }
 
         ReplaceOutcome outcome = TextTarget.Replace(_hwnd, capture, proposed, config.PasteOnlyIfFocusUnchanged);
         switch (outcome)
         {
             case ReplaceOutcome.Pasted:
-                if (capture.Saved != null)
+                if (restoreTo != null)
                 {
                     // The paste needs the clipboard to stay put for a moment: some hosts read it
                     // asynchronously after Ctrl+V returns. Restoring on a timer keeps the message
                     // thread free in the meantime.
-                    _pendingRestore = capture.Saved;
+                    _pendingRestore = restoreTo;
                     Win32.SetTimer(_hwnd, RestoreTimerId, (uint)Math.Max(config.ClipboardRestoreDelayMs, 1), 0);
                 }
-                if (capture.Saved is { Complete: false })
+                if (restoreTo is { Complete: false })
                 {
                     Notify(
                         "Clipboard partly restored",
@@ -308,17 +332,19 @@ internal sealed class FixService
                 // Never paste into a window the user switched to. Hand them the text instead -
                 // flagged transient, because a rewrite they never asked to keep has no business
                 // being archived in Win+V history or synced to their other devices.
-                ClipboardBridge.SetText(proposed, _hwnd, transient: true);
+                bool handedOver = ClipboardBridge.SetText(proposed, _hwnd, transient: true);
                 Notify(
-                    "Focus changed",
-                    capture.Saved is { IsEmpty: false }
-                        ? "The fixed text is on your clipboard, replacing what was there."
-                        : "The fixed text is on your clipboard.",
-                    isError: false);
+                    "Text not replaced",
+                    !handedOver
+                        ? "Focus changed while TextFix worked, and the clipboard was busy. Nothing was changed."
+                        : capture.Saved is { IsEmpty: false }
+                            ? "Focus changed while TextFix worked. The fixed text is on your clipboard, replacing what was there."
+                            : "Focus changed while TextFix worked. The fixed text is on your clipboard.",
+                    isError: !handedOver);
                 break;
 
             case ReplaceOutcome.Blocked:
-                RestoreClipboardNow(capture.Saved);
+                RestoreAfterCapture(capture);
                 Notify(
                     "Windows blocked the paste",
                     "That window is running as administrator, so TextFix cannot type into it.",
@@ -326,7 +352,7 @@ internal sealed class FixService
                 break;
 
             default:
-                RestoreClipboardNow(capture.Saved);
+                RestoreAfterCapture(capture);
                 Notify("Text fix failed", "Could not paste the fixed text.", isError: true);
                 break;
         }
@@ -351,9 +377,20 @@ internal sealed class FixService
         ClipboardBridge.RestoreOrClear(snapshot, _hwnd);
     }
 
-    private void RestoreClipboardNow(ClipboardSnapshot? snapshot)
+    /// <summary>
+    /// Puts the clipboard back after a capture that ended without a paste - unless something new
+    /// landed on it while the request was out. That is most likely the user copying something,
+    /// and it is now what they are holding; the older snapshot would overwrite it.
+    /// </summary>
+    private void RestoreAfterCapture(TextCapture? capture)
     {
-        if (snapshot != null) ClipboardBridge.RestoreOrClear(snapshot, _hwnd);
+        if (capture?.Saved == null) return;
+        if (ClipboardBridge.SequenceNumber() != capture.ClipboardSequence)
+        {
+            Log.Debug("The clipboard changed during the request; left as it is");
+            return;
+        }
+        ClipboardBridge.RestoreOrClear(capture.Saved, _hwnd);
     }
 
     private void ShowIndicator(AppConfig config, RECT caret, nint foreground, bool sweeping)

@@ -39,6 +39,8 @@ internal static unsafe class ClipboardBridge
     private static uint _formatExcludeMonitors;
     private static uint _formatNoHistory;
     private static uint _formatNoCloud;
+    private static uint _formatViewerIgnore;
+    private static uint _formatDropEffect;
     private static bool _formatsRegistered;
 
     private static void EnsureFormats()
@@ -52,6 +54,10 @@ internal static unsafe class ClipboardBridge
         _formatExcludeMonitors = Win32.RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing");
         _formatNoHistory = Win32.RegisterClipboardFormat("CanIncludeInClipboardHistory");
         _formatNoCloud = Win32.RegisterClipboardFormat("CanUploadToCloudClipboard");
+        // The older spelling of the same opt-out, which some password managers still set.
+        _formatViewerIgnore = Win32.RegisterClipboardFormat("Clipboard Viewer Ignore");
+        // What makes a cut in Explorer a move rather than a copy when it is pasted.
+        _formatDropEffect = Win32.RegisterClipboardFormat("Preferred DropEffect");
         _formatsRegistered = true;
     }
 
@@ -187,6 +193,10 @@ internal static unsafe class ClipboardBridge
     /// allow-list rather than an enumeration of everything on the clipboard - asking an app like
     /// Excel for all forty formats it advertises forces it to render every one of them, which
     /// costs seconds, and the exotic ones are never what the user is holding on to.
+    ///
+    /// The opt-out flags travel with the content. A password copied out of a password manager
+    /// carries them, and putting it back without them would hand it to clipboard history, cloud
+    /// sync and every clipboard manager on the machine.
     /// </summary>
     internal static ClipboardSnapshot? Snapshot(nint owner)
     {
@@ -194,6 +204,7 @@ internal static unsafe class ClipboardBridge
         Span<uint> wanted =
         [
             Win32.CF_UNICODETEXT, Win32.CF_HDROP, Win32.CF_DIB, _formatHtml, _formatRtf, _formatPng,
+            _formatDropEffect, _formatExcludeMonitors, _formatNoHistory, _formatNoCloud, _formatViewerIgnore,
         ];
 
         if (!TryOpen(owner)) return null;
@@ -239,6 +250,9 @@ internal static unsafe class ClipboardBridge
                     Win32.GlobalUnlock(handle);
                 }
             }
+            // Something is on the clipboard, but nothing on the allow-list - an Outlook attachment,
+            // a file inside a zip. It cannot be put back, and the user should hear about that.
+            if (snapshot.IsEmpty && Win32.EnumClipboardFormats(0) != 0) snapshot.Complete = false;
             return snapshot;
         }
         finally
