@@ -9,6 +9,15 @@ name: Build agent
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: 'Tag or commit to build. Empty builds the commit that triggered the run.'
+        type: string
+        default: ''
+
+# Building needs to read the repository and nothing else.
+permissions:
+  contents: read
 
 jobs:
   windows:
@@ -27,9 +36,14 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
 
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a commit, not a tag that can be moved. persist-credentials off: nothing after
+      # this step needs the token, so it is not left in .git/config for the build to find.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '9.0.x'
 
@@ -41,7 +55,7 @@ jobs:
         run: Get-Item dist\${{ matrix.rid }}\TextFix.exe | Select-Object Name, Length
         shell: pwsh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: TextFix-${{ matrix.rid }}
           path: TextFix-${{ matrix.rid }}.zip
@@ -61,16 +75,22 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Show toolchain
         run: swift --version
 
       - name: Build and package the agent
         # The tag drives CFBundleShortVersionString, so a release build is stamped with its own
-        # version and an ordinary CI build is not pretending to be one.
+        # version and an ordinary CI build is not pretending to be one. A release started by hand
+        # passes the tag in `ref`; GITHUB_REF_NAME is then the branch it was started from.
+        env:
+          REF: ${{ inputs.ref || github.ref_name }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${REF#v}"
           case "$version" in
             [0-9]*) ;;
             *) version="0.0.0" ;;
@@ -82,7 +102,7 @@ jobs:
           ls -l TextFix-macos-${{ matrix.target }}.zip
           lipo -info dist/macos/TextFix.app/Contents/MacOS/TextFix
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: TextFix-macos-${{ matrix.target }}
           path: TextFix-macos-${{ matrix.target }}.zip

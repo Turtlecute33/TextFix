@@ -18,3 +18,12 @@ obj/
 # Never commit a real key or a local config
 config.json
 secrets.dat
+
+# Nor signing material or environment files, should either ever sit in the tree
+*.p12
+*.pfx
+*.pem
+*.key
+*.keychain-db
+.env
+.env.*

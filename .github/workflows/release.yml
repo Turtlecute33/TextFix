@@ -15,20 +15,29 @@ on:
         description: 'Existing tag to build and release'
         required: true
 
+# Everything reads only, except the one job that publishes.
+permissions:
+  contents: read
+
 jobs:
   build:
     uses: ./.github/workflows/build-agent.yml
+    with:
+      # A run started by hand checks out the tag it is releasing, not the branch it was started
+      # from - otherwise "release v1.2.0" would publish whatever main holds today under that name.
+      ref: ${{ inputs.tag || github.ref_name }}
 
   release:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write       # create the release
+      id-token: write       # sign the provenance attestation
+      attestations: write   # store it
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      # No checkout: this job publishes what the build jobs made and needs none of the source.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: assets
           pattern: TextFix-*
@@ -39,6 +48,13 @@ jobs:
       - name: Checksum the assets
         working-directory: assets
         run: sha256sum *.zip | tee SHA256SUMS.txt
+
+      # A signed statement, kept by GitHub, that these exact files came out of this workflow at
+      # this commit. Unlike SHA256SUMS.txt, it cannot be replaced together with the files it
+      # describes. Check a download with: gh attestation verify <zip> -R Turtlecute33/TextFix
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*.zip
 
       - name: Publish release
         working-directory: assets
