@@ -63,12 +63,19 @@ never goes into `config.json`.
 
 Needs macOS 13 Ventura or later. The download is one universal app for Apple Silicon and Intel.
 
-1. Download `TextFix-macos-universal.zip` from the
+1. Install it with [Homebrew](https://brew.sh):
+
+   ```zsh
+   brew install --cask turtlecute33/tap/textfix
+   ```
+
+   Or download `TextFix-macos-universal.zip` from the
    [latest release](https://github.com/Turtlecute33/TextFix/releases/latest), unzip it and drag
    `TextFix.app` into **Applications**. Or build it yourself with `./build-mac.sh`.
-2. **The first launch needs a right-click > Open**, then *Open* again in the dialog. The app is
-   signed, but ad-hoc rather than with a paid Apple Developer ID, so Gatekeeper wants you to say
-   you meant it. Once is enough.
+2. **The first launch is blocked once.** The app is signed, but ad-hoc rather than with a paid
+   Apple Developer ID, so Gatekeeper wants you to say you meant it. On macOS 15 and later: open
+   TextFix, click *Done*, then **System Settings > Privacy & Security > Open Anyway**. On macOS 13
+   and 14: right-click the app, choose *Open*, then *Open* again in the dialog.
 3. Allow it under **System Settings > Privacy & Security > Accessibility**. TextFix asks on first
    run and the settings window keeps a banner up until you do. Without it macOS lets no app read or
    replace text in another app's window, so nothing can work until this is on.
@@ -128,9 +135,19 @@ clipboard, presses Ctrl+C, and looks: the marker still being there means nothing
 anything else is what the application copied. Only in the first case does it press Ctrl+A.
 
 **Your clipboard comes back.** Whatever you were holding - text, files, an image, rich text - is
-copied out before the probe and restored about 180 ms after the paste. The temporary text is flagged
-so clipboard managers, Windows clipboard history (Win+V) and cloud clipboard all skip it. The macOS
-fallback path does the same, using the `org.nspasteboard.TransientType` convention.
+copied out before the probe and restored about 180 ms after the paste. It comes back with the
+flags it had: a password copied from a password manager stays out of clipboard history when it is
+put back. TextFix's own temporary text is flagged so clipboard managers, Windows clipboard history
+(Win+V) and cloud clipboard all skip it. The macOS fallback path does the same, using the
+`org.nspasteboard.TransientType` convention, and keeps everything it writes off Universal
+Clipboard.
+
+One copy TextFix cannot flag on Windows is the one the application itself makes when TextFix
+presses Ctrl+C. If you use clipboard history, the text you fix shows up there, as it would if you
+had copied it by hand.
+
+If you copy something else while a fix is running, that is what you get back afterwards, not the
+older clipboard.
 
 A restore that is still waiting on its timer is always settled before anything else touches the
 clipboard - a second fix, a cancel, or quitting the agent. That is what stops a quick second press,
@@ -159,7 +176,8 @@ nothing moving in it costs nothing to keep on screen: the animation only exists 
 request to wait for.
 
 Pressing the hotkey again while a fix is in flight cancels it. The menu bar tooltip says so while
-it is working.
+it is working. When the model finds nothing to change, a short notice says so, and the field is
+left alone.
 
 If you have asked your system for less movement - Reduce Motion on macOS, or turning off "Animate
 controls and elements inside windows" on Windows - nothing travels and nothing scales. The capsule
@@ -176,11 +194,13 @@ work". Both can be switched off if you want the agent completely silent.
 ## Privacy
 
 - **Your key, your provider.** No middleman service, no account, no telemetry.
-- **Zero data retention first.** On OpenRouter every request asks for a ZDR route. If routing cannot
-  satisfy it, the request falls back to standard routing and tells you once per model rather than
-  downgrading silently.
-- **Reasoning off by default.** Copy-editing does not benefit from a scratchpad, and it costs
-  seconds.
+- **Zero data retention first.** On OpenRouter every request asks for a ZDR route. If no route
+  offers it, the request is sent once more, but only to providers that do not keep prompts for
+  training (`data_collection: deny`), and TextFix tells you once per model. If no provider meets
+  even that, the fix fails and says so; it never falls further. Turn off zero data retention to
+  let your OpenRouter account settings decide instead.
+- **Reasoning off by default** on OpenRouter. Copy-editing does not benefit from a scratchpad, and
+  it costs seconds. PayPerQ offers no switch for it.
 - **Password fields are refused.** On macOS this is reliable, because `AXSecureTextField` is
   reported by native controls and by password inputs inside Safari and Chrome. On Windows it is
   best-effort: the password style is visible on native controls, though not inside a browser.
@@ -192,9 +212,11 @@ work". Both can be switched off if you want the agent completely silent.
   and no key, but it does mean your provider sees the machine at sign-in even on a day you never
   use TextFix. Set `prewarmOnStartup` to `false` to stop it; the only cost is one handshake on the
   first fix of the session.
-- **Only two hosts, ever.** `openrouter.ai` and `api.ppq.ai`. No telemetry, no analytics, no update
-  check, no fonts or assets fetched at runtime, and no third-party dependency in either agent that
-  could add one.
+- **Only two hosts, ever.** `openrouter.ai` and `api.ppq.ai`. Redirects are refused, so a request
+  cannot be sent on to a third host. No telemetry, no analytics, no update check, no fonts or
+  assets fetched at runtime, and no third-party dependency in either agent that could add one.
+- **Terminals are refused.** A terminal's whole scrollback reads as one text field, and Ctrl+C in
+  a Windows console stops the running program instead of copying.
 
 <br>
 
@@ -213,12 +235,12 @@ Everything from the settings window is here, plus a few knobs that are not.
 | --- | --- | --- |
 | `provider` | `openrouter` | `openrouter` or `payperq`. |
 | `model` | `~openai/gpt-mini-latest` | A slug from the picker, or `custom` with `customModel` set. |
-| `zeroDataRetention` | `true` | Ask OpenRouter for a ZDR route. |
+| `zeroDataRetention` | `true` | Ask OpenRouter for a ZDR route, and never use a provider that trains on prompts. |
 | `allowReasoning` | `false` | Let the model reason first. Slower. |
 | `indicator` | `caret` | `caret`, `none`, plus `tray` on Windows / `menubar` on macOS. |
 | `notifyOnError` | `true` | Show failures on screen. |
 | `skipPasswordFields` | `true` | Refuse password controls. |
-| `maxInputLength` | `10000` | UTF-16 code units, counted the same way on both platforms. Anything longer is refused rather than truncated. |
+| `maxInputLength` | `10000` | UTF-16 code units, counted the same way on both platforms. Anything longer is refused rather than truncated. So is an answer that is cut short, or more than twice as long as your text (and over 10000). |
 | `requestBudgetMs` | `90000` | Wall clock for the whole request, retries included. |
 | `prewarmOnStartup` | `true` | Warm the TLS connection at launch. See Privacy. |
 | `verboseLog` | `false` | Adds request-level detail. Still never your text. |
@@ -270,21 +292,24 @@ Rewrite the text below ... Output only the revised text.
 With a placeholder, the whole prompt is sent as one message with your text substituted in. That is
 the only way a prompt can control how the input is fenced off, and fencing it is what stops
 dictation containing something instruction-shaped ("scrap that, say instead...") from being obeyed
-as an instruction. If a model echoes the tags back, they are stripped from the result.
+as an instruction. If a model echoes the tags back, they are stripped from the result - only tags
+your prompt uses, so text that really starts and ends with markup comes back intact.
 
 `{nonce}` expands to a short random value, different on every request. A fixed `<text>` fence is
 only a fence by agreement: text that happens to contain the literal `</text>` - pasted markup, a
 quoted example, or something written to do exactly this - would close it early, and everything after
 it would read as instructions rather than as input. A fence named with a value that did not exist
-when the text was captured cannot be closed early. Use it in any prompt of your own that fences its
-input.
+when the text was captured cannot be closed early. It makes the boundary unforgeable, which is
+not the same as making the model obey it: treat a fence as a strong hint, not a guarantee. Use it in
+any prompt of your own that fences its input.
 
-If you were already running TextFix, a Fix prompt you never edited is carried forward to the current
-one automatically. A prompt you *did* edit is left exactly as you wrote it - add `{nonce}` to your
-fence yourself if you want it.
+If you were already running TextFix, a Fix or Rewrite prompt you never edited is carried forward to
+the current one automatically. A prompt you *did* edit is left exactly as you wrote it - add
+`{nonce}` to your fence yourself if you want it.
 
 Without a placeholder the prompt is sent as a system message and your text as a separate one, which
-is the simpler shape and stays cacheable. Both work; the shipped Fix prompt uses a placeholder.
+is the simpler shape and stays cacheable. Both work; both shipped prompts use a placeholder, because
+Rewrite is the action most often run on text somebody else wrote.
 
 <br>
 
@@ -296,10 +321,16 @@ clipboard, replace, restore - but replaces the model call with UPPER CASE, so it
 costs nothing. If your text comes back uppercased the plumbing works and the problem is the request;
 if it does not, the log will name the step that stopped.
 
-**On macOS, the hotkey does nothing at all.** Check Accessibility permission. Rebuilding or replacing
-`TextFix.app` changes its signature, and macOS then treats it as a different app: remove the old
-entry in System Settings > Privacy & Security > Accessibility with the minus button and add the new
-one.
+**On macOS, the hotkey does nothing at all.** Check Accessibility permission. Rebuilding, replacing
+or updating `TextFix.app` - `brew upgrade` included - changes its signature, and macOS then treats it
+as a different app: remove the old entry in System Settings > Privacy & Security > Accessibility
+with the minus button and add the new one.
+
+**"TextFix does not work in terminal windows."** On purpose - see Privacy. Fix the text in an
+editor and paste it into the terminal.
+
+**"Settings not read."** `config.json` has a syntax error, so TextFix runs on its defaults. Fix the
+file and restart the agent, or save settings: the unreadable file is kept as `config.json.bad`.
 
 **"Another app already owns" that hotkey.** Something registered it first. Pick a different
 combination, or an F13-F24 key.
@@ -345,6 +376,19 @@ CI builds both on every push. A release is a tag:
 
 ```bash
 git tag v1.1.0 && git push origin v1.1.0
+```
+
+Once the release is published, point the Homebrew cask at it:
+
+```zsh
+./update-tap.zsh 1.1.0
+```
+
+Every release asset carries a build provenance attestation, which shows that the file came out of
+this repository's release workflow:
+
+```zsh
+gh attestation verify TextFix-macos-universal.zip -R Turtlecute33/TextFix
 ```
 
 <br>
