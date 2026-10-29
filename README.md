@@ -72,10 +72,11 @@ Needs macOS 13 Ventura or later. The download is one universal app for Apple Sil
    Or download `TextFix-macos-universal.zip` from the
    [latest release](https://github.com/Turtlecute33/TextFix/releases/latest), unzip it and drag
    `TextFix.app` into **Applications**. Or build it yourself with `./build-mac.sh`.
-2. **The first launch is blocked once.** The app is signed, but ad-hoc rather than with a paid
-   Apple Developer ID, so Gatekeeper wants you to say you meant it. On macOS 15 and later: open
-   TextFix, click *Done*, then **System Settings > Privacy & Security > Open Anyway**. On macOS 13
-   and 14: right-click the app, choose *Open*, then *Open* again in the dialog.
+2. **The first launch is blocked after each install or upgrade.** The app is signed, but ad-hoc
+   rather than with a paid Apple Developer ID, so Gatekeeper wants you to say you meant it. On
+   macOS 15 and later: open TextFix, click *Done*, then **System Settings > Privacy & Security >
+   Open Anyway**. On macOS 13 and 14: right-click the app, choose *Open*, then *Open* again in the
+   dialog.
 3. Allow it under **System Settings > Privacy & Security > Accessibility**. TextFix asks on first
    run and the settings window keeps a banner up until you do. Without it macOS lets no app read or
    replace text in another app's window, so nothing can work until this is on.
@@ -85,6 +86,21 @@ Needs macOS 13 Ventura or later. The download is one universal app for Apple Sil
 
 Your key goes in the login keychain, not in `config.json`. Moving `TextFix.app` after granting
 Accessibility makes macOS forget the permission - put it in Applications first.
+
+### Checking a download
+
+Each release zip has a build provenance attestation. It shows that the file came from the release
+workflow of this repository. Check the zip before you unzip it, because Safari can unzip it and
+move the zip to the Trash. The check needs the GitHub CLI, `gh`:
+
+```
+gh attestation verify TextFix-win-x64.zip -R Turtlecute33/TextFix
+gh attestation verify TextFix-macos-universal.zip -R Turtlecute33/TextFix
+```
+
+To get the zip with no unzip step, download it with
+`gh release download v<version> -R Turtlecute33/TextFix -p <zip>`. Homebrew compares the zip with
+the hash in the cask, so a Homebrew install does not need this check.
 
 <br>
 
@@ -201,9 +217,11 @@ work". Both can be switched off if you want the agent completely silent.
   let your OpenRouter account settings decide instead.
 - **Reasoning off by default** on OpenRouter. Copy-editing does not benefit from a scratchpad, and
   it costs seconds. PayPerQ offers no switch for it.
-- **Password fields are refused.** On macOS this is reliable, because `AXSecureTextField` is
-  reported by native controls and by password inputs inside Safari and Chrome. On Windows it is
-  best-effort: the password style is visible on native controls, though not inside a browser.
+- **Password fields are refused when the field reports itself as one.** On macOS that is
+  `AXSecureTextField`, which native controls and password inputs in Safari and Chrome report. On
+  Windows it is the password style, which only native controls show. Apps on macOS that do not
+  report the focused field, and browser, WPF or Qt fields on Windows, are not checked. Their
+  password boxes usually refuse to copy.
 - **The log records what happened, never what you wrote.** Lengths, statuses and error classes only,
   capped at 256 KB. Provider error bodies are not written to it either - they routinely carry an
   account identifier.
@@ -212,11 +230,18 @@ work". Both can be switched off if you want the agent completely silent.
   and no key, but it does mean your provider sees the machine at sign-in even on a day you never
   use TextFix. Set `prewarmOnStartup` to `false` to stop it; the only cost is one handshake on the
   first fix of the session.
+- **With nothing selected, the hotkey takes what Select All copies.** In a text box that is the
+  whole field. Outside a text box it can be a whole web page or document, and TextFix sends it to
+  your provider if it is not longer than `maxInputLength`. To stop this, untick **Whole field when
+  nothing is selected** for the action.
 - **Only two hosts, ever.** `openrouter.ai` and `api.ppq.ai`. Redirects are refused, so a request
   cannot be sent on to a third host. No telemetry, no analytics, no update check, no fonts or
   assets fetched at runtime, and no third-party dependency in either agent that could add one.
-- **Terminals are refused.** A terminal's whole scrollback reads as one text field, and Ctrl+C in
-  a Windows console stops the running program instead of copying.
+- **Only known standalone terminal apps are refused.** A terminal's whole scrollback reads as one
+  text field, and Ctrl+C in a Windows console stops the running program instead of copying. TextFix
+  does not detect a terminal inside an editor, an IDE, a browser or a remote-desktop window. There
+  it can send the selected text, or the whole scrollback when nothing is selected, and then paste
+  the answer onto the command line. Do not use TextFix in those terminals.
 
 <br>
 
@@ -275,7 +300,8 @@ wait for the probing copy - only spent when nothing is selected) and `copyTimeou
 allowed for the whole-field read).
 
 Per action: `enabled`, `hotkey`, `prompt`, `model` (empty means the top-level model) and
-`wholeTextWhenNoSelection`.
+`wholeTextWhenNoSelection` (default `true`: with nothing selected, fix the whole field; see
+Privacy).
 
 ### The `{text}` and `{nonce}` placeholders
 
@@ -384,12 +410,8 @@ Once the release is published, point the Homebrew cask at it:
 ./update-tap.zsh 1.1.0
 ```
 
-Every release asset carries a build provenance attestation, which shows that the file came out of
-this repository's release workflow:
-
-```zsh
-gh attestation verify TextFix-macos-universal.zip -R Turtlecute33/TextFix
-```
+Every release zip carries a build provenance attestation. To check one, see
+[Checking a download](#checking-a-download).
 
 <br>
 

@@ -19,8 +19,9 @@ internal static class SecretStore
 {
     private const string FileName = "secrets.dat";
 
-    // Extra entropy mixed into DPAPI so a blob lifted out of this file cannot be decrypted by
-    // another program simply because it runs as the same user.
+    // Fixed, public entropy. It tags the blob for this purpose and version, and stops generic
+    // DPAPI tools that pass no entropy. It is not a secret: any program that runs as this user
+    // can still decrypt the blob. Do not change the value, or stored keys stop decrypting.
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("TextFix.ApiKey.v1");
 
     private static string FilePath => Path.Combine(AppConfig.Directory, FileName);

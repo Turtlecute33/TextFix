@@ -60,33 +60,30 @@ enum SecretStore {
     }
 
     /// Stores or, given an empty key, removes the key. False when the keychain refused.
+    ///
+    /// Never updates an item in place: it always deletes, then adds. An item that is already there
+    /// can come from another app with an open access list, and an update would put the key in it.
     @discardableResult
     static func setApiKey(_ key: String, for provider: AiProvider) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = baseQuery(provider)
 
-        if trimmed.isEmpty {
-            let status = SecItemDelete(query as CFDictionary)
-            if status != errSecSuccess && status != errSecItemNotFound {
-                Log.warn("Could not remove the stored API key (OSStatus \(status))")
-                return false
-            }
-            return true
+        let deleted = SecItemDelete(query as CFDictionary)
+        if deleted != errSecSuccess && deleted != errSecItemNotFound {
+            Log.warn("Could not remove the stored API key (OSStatus \(deleted))")
+            return false
         }
+        if trimmed.isEmpty { return true }
 
         guard let data = trimmed.data(using: .utf8) else { return false }
-        let update: [String: Any] = [kSecValueData as String: data]
-        var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        if status == errSecItemNotFound {
-            var insert = query
-            insert[kSecValueData as String] = data
-            // The agent only ever needs the key while the user is logged in and the screen is
-            // unlocked, so this is the narrowest class that still works.
-            insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-            insert[kSecAttrLabel as String] = "TextFix - \(provider.displayName) API key"
-            insert[kSecAttrDescription as String] = "API key"
-            status = SecItemAdd(insert as CFDictionary, nil)
-        }
+        var insert = query
+        insert[kSecValueData as String] = data
+        // The agent only ever needs the key while the user is logged in and the screen is
+        // unlocked, so this is the narrowest class that still works.
+        insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+        insert[kSecAttrLabel as String] = "TextFix - \(provider.displayName) API key"
+        insert[kSecAttrDescription as String] = "API key"
+        let status = SecItemAdd(insert as CFDictionary, nil)
         if status != errSecSuccess {
             Log.warn("Could not save the API key (OSStatus \(status))")
             return false

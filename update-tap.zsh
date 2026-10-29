@@ -11,8 +11,10 @@ zip=TextFix-macos-universal.zip
 tmp=$(mktemp -d)
 trap 'rm -rf $tmp' EXIT
 
-# The hash of the file that users download, not of a local build.
+# The hash of the file that users download, not of a local build. Stop if that file did not
+# come from the release workflow of this repository.
 gh release download v$version -R Turtlecute33/TextFix -p $zip -D $tmp
+gh attestation verify $tmp/$zip -R Turtlecute33/TextFix
 sha=$(shasum -a 256 $tmp/$zip | cut -d' ' -f1)
 
 gh repo clone Turtlecute33/homebrew-tap $tmp/tap -- --quiet --depth 1

@@ -12,6 +12,12 @@ internal sealed class ClipboardSnapshot
     /// <summary>False when something on the clipboard could not be captured and will be lost.</summary>
     internal bool Complete { get; set; } = true;
 
+    /// <summary>
+    /// True when the clipboard had an opt-out flag. The restore sets the flags again, also when
+    /// the flag data itself could not be copied.
+    /// </summary>
+    internal bool Sensitive { get; set; }
+
     internal bool IsEmpty => Blobs.Count == 0;
 }
 
@@ -216,6 +222,12 @@ internal static unsafe class ClipboardBridge
             {
                 if (format == 0) continue;
                 if (!Win32.IsClipboardFormatAvailable(format)) continue;
+                // Recorded before the data is read, so a flag that cannot be copied still counts.
+                if (format == _formatExcludeMonitors || format == _formatNoHistory
+                    || format == _formatNoCloud || format == _formatViewerIgnore)
+                {
+                    snapshot.Sensitive = true;
+                }
 
                 nint handle = Win32.GetClipboardData(format);
                 if (handle == 0) continue;
@@ -287,6 +299,7 @@ internal static unsafe class ClipboardBridge
                 }
                 if (Win32.SetClipboardData(format, handle) == 0) Win32.GlobalFree(handle);
             }
+            if (snapshot.Sensitive) MarkTransient();
         }
         finally
         {

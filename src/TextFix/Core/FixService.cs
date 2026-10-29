@@ -344,7 +344,9 @@ internal sealed class FixService
                 break;
 
             case ReplaceOutcome.Blocked:
-                RestoreAfterCapture(capture);
+                // Replace can put the fixed text on the clipboard before it fails. Then
+                // RestoreAfterCapture sees a new sequence number and does not restore.
+                if (restoreTo != null) ClipboardBridge.RestoreOrClear(restoreTo, _hwnd);
                 Notify(
                     "Windows blocked the paste",
                     "That window is running as administrator, so TextFix cannot type into it.",
@@ -352,7 +354,7 @@ internal sealed class FixService
                 break;
 
             default:
-                RestoreAfterCapture(capture);
+                if (restoreTo != null) ClipboardBridge.RestoreOrClear(restoreTo, _hwnd);
                 Notify("Text fix failed", "Could not paste the fixed text.", isError: true);
                 break;
         }
