@@ -26,11 +26,14 @@ case "$(uname -m)" in
 esac
 qmake="${QMAKE:-qmake6}"
 command -v "$qmake" >/dev/null || { echo "Install Qt 6 development tools (qmake6, Qt Quick, Qt DBus, Qt SVG)." >&2; exit 1; }
-build="$root/build/linux-$arch"
+# qmake/make do not rebuild objects merely because a compiler define changed. Keep versions
+# in separate directories so a release can never reuse a binary stamped with an older version.
+build="$root/build/linux-$arch/$version"
 mkdir -p "$build"
 cd "$build"
 "$qmake" "$root/src/TextFixLinux/textfix.pro" "TEXTFIX_VERSION=$version"
 make -s -j"${JOBS:-$(nproc)}"
+[[ "$("$build/textfix" --version)" == "TextFix $version" ]] || { echo "Binary version does not match $version" >&2; exit 1; }
 if $tests; then
     mkdir -p tests
     cd tests

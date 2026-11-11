@@ -127,8 +127,8 @@ and zip. On Ubuntu add `qt6-base-dev qt6-declarative-dev qt6-svg-dev`; Arch incl
 the development files in its Qt packages. No third-party source downloads are used.
 
 ```sh
-./build-linux.sh --test --zip --version 1.3.1
-./build-linux.sh --omarchy --zip --version 1.3.1
+./build-linux.sh --test --zip --version 1.4.0
+./build-linux.sh --omarchy --zip --version 1.4.0
 textfix doctor --json
 printf 'rough text' | textfix filter
 printf 'rough text' | textfix filter --rewrite --json
