@@ -4,7 +4,7 @@
 
 ### One keyboard shortcut. Your text, fixed in place.
 
-Press your hotkey in any text box, on Windows or macOS. With text selected it fixes the selection;
+Press your hotkey in a text box on Windows, macOS, or Linux (Hyprland and X11). With text selected it fixes the selection;
 with nothing selected it fixes the whole field. The result replaces what was there, and one undo
 puts it back.
 
@@ -17,19 +17,19 @@ no subscription, no telemetry.
 
 ## What it is
 
-Two small native agents that behave the same way and share one config format. Neither carries a UI
-framework, a runtime or a single third-party dependency.
+Three native agents with a shared provider protocol and compatible core configuration. Windows
+and macOS use platform APIs directly; Linux uses C++ and Qt Quick with desktop-specific text capture.
 
-|  | Windows | macOS |
-| --- | --- | --- |
-| Lives in | the notification area | the menu bar, never the Dock |
-| Built from | C# on direct Win32, Native AOT | Swift on AppKit |
-| Ships as | one 6 MB `TextFix.exe` | a 1 MB universal `TextFix.app` |
-| Needs | nothing | Accessibility permission |
-| Reads your text by | clipboard round trip | the Accessibility API, clipboard as fallback |
+|  | Windows | macOS | Linux / Omarchy |
+| --- | --- | --- | --- |
+| Lives in | the notification area | the menu bar, never the Dock | the system tray, with desktop shortcut commands |
+| Built from | C# on direct Win32, Native AOT | Swift on AppKit | C++ and Qt Quick |
+| Ships as | one 6 MB `TextFix.exe` | a 1 MB universal `TextFix.app` | x64/ARM64 zip; native Omarchy Arch package |
+| Needs | nothing | Accessibility permission | Qt 6.4+, clipboard tools, Secret Service keyring |
+| Reads your text by | clipboard round trip | the Accessibility API, clipboard as fallback | clipboard round trip on Hyprland/X11; manual clipboard mode on other Wayland desktops |
 
-Each sits idle using a few megabytes of private memory, burns no measurable CPU, and does nothing
-whatsoever until you press the hotkey.
+The agents wait for your shortcut. Linux loads its settings UI only when requested and uses file
+notifications to follow Omarchy's theme without idle polling.
 
 ```
 hotkey  in a text box, nothing selected  ->  the whole field comes back fixed
@@ -87,15 +87,44 @@ Needs macOS 13 Ventura or later. The download is one universal app for Apple Sil
 Your key goes in the login keychain, not in `config.json`. Moving `TextFix.app` after granting
 Accessibility makes macOS forget the permission - put it in Applications first.
 
+### Linux
+
+Download `TextFix-linux-x64.zip` or `TextFix-linux-arm64.zip` from the
+[latest release](https://github.com/Turtlecute33/TextFix/releases/latest), extract it and run
+`./install.sh`. Install your distribution's Qt 6 runtime and desktop tools first, then run
+`textfix settings` to save your provider key in the Secret Service keyring.
+
+Bind `textfix fix` and `textfix rewrite` in desktop shortcuts. Direct replacement supports
+**Hyprland and X11**. On other Wayland desktops, copy text, run `textfix clipboard`, then paste.
+See the [Linux guide](src/TextFixLinux/README.md) for dependency commands, behavior and limitations.
+
+### Omarchy
+
+Use the dedicated `TextFix-omarchy-x64.zip` / `TextFix-omarchy-arm64.zip` archives, or install
+`TextFix-omarchy-x64.pkg.tar.zst` with `sudo pacman -U ./TextFix-omarchy-x64.pkg.tar.zst`.
+The Arch package tracks dependencies and adds the launcher entry. From a source checkout:
+
+```sh
+cd packaging/omarchy
+makepkg -si
+```
+
+TextFix follows Omarchy's theme and language live, uses Hyprland's native shortcut dispatcher,
+and ships Lua and legacy keybinding examples. It needs no root keyboard daemon. Add the
+bindings following the [Omarchy setup instructions](src/TextFixLinux/README.md#desktop-shortcuts).
+Installation leaves your existing keybindings under your control.
+
 ### Checking a download
 
-Each release zip has a build provenance attestation. It shows that the file came from the release
+Each release zip and Arch package has a build provenance attestation. It shows that the file came from the release
 workflow of this repository. Check the zip before you unzip it, because Safari can unzip it and
 move the zip to the Trash. The check needs the GitHub CLI, `gh`:
 
 ```
 gh attestation verify TextFix-win-x64.zip -R Turtlecute33/TextFix
 gh attestation verify TextFix-macos-universal.zip -R Turtlecute33/TextFix
+gh attestation verify TextFix-linux-x64.zip -R Turtlecute33/TextFix
+gh attestation verify TextFix-omarchy-x64.pkg.tar.zst -R Turtlecute33/TextFix
 ```
 
 To get the zip with no unzip step, download it with
@@ -106,7 +135,7 @@ the hash in the cask, so a Homebrew install does not need this check.
 
 ## Hotkeys, and why F13-F24 are the right choice
 
-Both settings windows record whatever you press. Anything with a modifier works, and so do **F13
+The Windows and macOS settings windows record whatever you press. Anything with a modifier works, and so do **F13
 through F24** on their own (macOS knows F13-F20).
 
 Those keys are the reason this pairs well with a VIA or QMK keyboard: they exist in the keyboard
@@ -117,11 +146,17 @@ collide with an application shortcut.
 A bare letter or digit is rejected on purpose - claiming `A` globally would break typing everywhere
 on the machine.
 
-Defaults are `Ctrl+Alt+J` on Windows and `Ctrl+Opt+J` on macOS.
+Defaults are `Ctrl+Alt+J` on Windows and `Ctrl+Opt+J` on macOS. Linux shortcuts are configured
+by your desktop; the Omarchy examples use `Ctrl+Alt+J` and `Ctrl+Alt+K`, on key release.
 
 <br>
 
 ## How it reads and replaces your text
+
+Linux uses a clipboard round trip, checks the focused window before sending shortcuts, and
+restores the previous clipboard after pasting. Wayland restoration retains one clipboard
+representation; X11 retains all offered formats. Moving the caret inside the same window cannot
+be detected. See the [Linux behavior and limits](src/TextFixLinux/README.md#desktop-behavior-and-limits).
 
 ### macOS: ask the app
 
@@ -214,34 +249,38 @@ work". Both can be switched off if you want the agent completely silent.
   offers it, the request is sent once more, but only to providers that do not keep prompts for
   training (`data_collection: deny`), and TextFix tells you once per model. If no provider meets
   even that, the fix fails and says so; it never falls further. Turn off zero data retention to
-  let your OpenRouter account settings decide instead.
+  let your OpenRouter account settings decide instead. Linux currently requires a compatible
+  ZDR route when enabled and fails without downgrading this policy.
 - **Reasoning off by default** on OpenRouter. Copy-editing does not benefit from a scratchpad, and
   it costs seconds. PayPerQ offers no switch for it.
 - **Password fields are refused when the field reports itself as one.** On macOS that is
   `AXSecureTextField`, which native controls and password inputs in Safari and Chrome report. On
   Windows it is the password style, which only native controls show. Apps on macOS that do not
   report the focused field, and browser, WPF or Qt fields on Windows, are not checked. Their
-  password boxes usually refuse to copy.
+  password boxes usually refuse to copy. Linux has no reliable password-field detection;
+  trigger its shortcuts only in trusted editable fields.
 - **The log records what happened, never what you wrote.** Lengths, statuses and error classes only,
   capped at 256 KB. Provider error bodies are not written to it either - they routinely carry an
-  account identifier.
+  account identifier. Linux does not keep a request log.
 - **Nothing is sent until you press the hotkey.** The one exception is an unauthenticated TLS
   handshake to your provider when the agent starts, to warm the connection. It carries no payload
   and no key, but it does mean your provider sees the machine at sign-in even on a day you never
   use TextFix. Set `prewarmOnStartup` to `false` to stop it; the only cost is one handshake on the
-  first fix of the session.
+  first fix of the session. Linux does not prewarm at startup.
 - **With nothing selected, the hotkey takes what Select All copies.** In a text box that is the
   whole field. Outside a text box it can be a whole web page or document, and TextFix sends it to
   your provider if it is not longer than `maxInputLength`. To stop this, untick **Whole field when
   nothing is selected** for the action.
 - **Only two hosts, ever.** `openrouter.ai` and `api.ppq.ai`. Redirects are refused, so a request
   cannot be sent on to a third host. No telemetry, no analytics, no update check, no fonts or
-  assets fetched at runtime, and no third-party dependency in either agent that could add one.
+  assets fetched at runtime. The Windows and macOS agents have no third-party dependencies;
+  Linux uses distribution-provided Qt libraries.
 - **Only known standalone terminal apps are refused.** A terminal's whole scrollback reads as one
   text field, and Ctrl+C in a Windows console stops the running program instead of copying. TextFix
   does not detect a terminal inside an editor, an IDE, a browser or a remote-desktop window. There
   it can send the selected text, or the whole scrollback when nothing is selected, and then paste
-  the answer onto the command line. Do not use TextFix in those terminals.
+  the answer onto the command line. Do not use TextFix in those terminals. Linux allows selected
+  text in recognized terminal windows using Ctrl+Shift+C/V, and refuses whole-field capture there.
 
 <br>
 
@@ -249,6 +288,9 @@ work". Both can be switched off if you want the agent completely silent.
 
 `config.json` is plain JSON and safe to hand-edit; the tray or menu bar menu opens the folder.
 Everything from the settings window is here, plus a few knobs that are not.
+
+The tables below describe Windows/macOS. Linux shares provider, model, prompt and request-budget
+keys; its [guide](src/TextFixLinux/README.md) covers the supported desktop options and defaults.
 
 | | Windows | macOS |
 | --- | --- | --- |
@@ -398,7 +440,17 @@ Needs the Xcode command line tools and nothing else. The icon is drawn at build 
 `src/TextFixMac/Tools/makeicon.swift`, so there is no asset to keep in step;
 `tools/make-icon.py` does the same for the Windows `.ico` (needs Pillow).
 
-CI builds both on every push. A release is a tag:
+Build Linux and the Omarchy variant with Qt 6 development packages, qmake6, make and a C++17 compiler:
+
+```bash
+./build-linux.sh --test --zip          # -> TextFix-linux-<arch>.zip
+./build-linux.sh --omarchy --zip       # -> TextFix-omarchy-<arch>.zip
+(cd packaging/omarchy && makepkg)      # -> native Arch package (on Arch/Omarchy)
+```
+
+See the [Linux build guide](src/TextFixLinux/README.md#build-and-test) for dependencies.
+CI builds all platforms on every push and pull request, including Linux x64/ARM64 and an
+Omarchy Arch package. A release is a tag:
 
 ```bash
 git tag v1.1.0 && git push origin v1.1.0
@@ -438,12 +490,17 @@ src/TextFixMac/              the macOS agent (Swift, AppKit)
     Editing/                 Accessibility read and write, pasteboard, synthesised keys
     Ui/                      menu bar item, caret pulse, toast, settings window
   Tools/makeicon.swift       draws AppIcon.icns at build time
+
+src/TextFixLinux/            the Linux agent (C++, Qt Quick)
+  src/                       provider client, configuration, desktop bridge, settings and tray
+  tests/                     pipeline, HTTP, configuration, theme and offscreen UI tests
+packaging/linux/             launcher entry, icon and release installer
+packaging/omarchy/           Arch PKGBUILD and Hyprland bindings (Lua and legacy)
+build-linux.sh               Linux/Omarchy builds, tests and zip packaging
 ```
 
-The two agents are separate programs, not one codebase with `#if` branches. Every line of both is
-platform API calls - Win32 and AppKit have nothing in common to share - and the parts that *are*
-shared, the provider protocol and the config format, are a specification that both implement rather
-than code either one imports.
+The agents are separate native programs. The provider protocol and core config format are a
+specification each implements, with platform-specific capture, settings and packaging.
 
 <br>
 

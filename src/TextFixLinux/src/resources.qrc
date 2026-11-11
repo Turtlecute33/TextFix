@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="Main.qml">Main.qml</file>
+    <file alias="textfix.svg">../../../packaging/linux/textfix.svg</file>
+    <file alias="i18n/it.json">i18n/it.json</file>
+  </qresource>
+</RCC>

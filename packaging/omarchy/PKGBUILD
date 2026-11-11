@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Build from a repository checkout: cd packaging/omarchy && makepkg
+# The local checkout is intentional: this also builds untagged changes for testing.
+pkgname=textfix-omarchy
+pkgver=1.3.1
+pkgrel=1
+pkgdesc='Fix text in place with AI, integrated with Omarchy and Hyprland'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Turtlecute33/TextFix'
+license=('GPL-3.0-only')
+depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-wayland' 'wl-clipboard' 'hyprland' 'libsecret')
+makedepends=('gcc' 'make')
+optdepends=('gnome-keyring: Secret Service keyring (KeePassXC also works)')
+provides=('textfix')
+conflicts=('textfix')
+options=('!debug')
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/../.."
+  test -f src/TextFixLinux/textfix.pro || {
+    echo 'Run makepkg from packaging/omarchy in a TextFix repository checkout.' >&2
+    return 1
+  }
+  ./build-linux.sh --omarchy --version "$pkgver"
+}
+
+check() {
+  cd "$startdir/../.."
+  ./build-linux.sh --omarchy --version "$pkgver" --test
+}
+
+package() {
+  cd "$startdir/../.."
+  local target=x64
+  [[ "$CARCH" == aarch64 ]] && target=arm64
+  ./dist/omarchy-$target/install.sh --prefix /usr --destdir "$pkgdir"
+}

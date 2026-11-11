@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=TextFix
+Name[it]=TextFix
+Comment=Fix or rewrite text in place with a keyboard shortcut
+Comment[it]=Correggi o riscrivi il testo con una scorciatoia
+Exec=textfix settings
+Icon=textfix
+Terminal=false
+Categories=Utility;TextTools;
+StartupWMClass=textfix
+Keywords=text;writing;dictation;rewrite;

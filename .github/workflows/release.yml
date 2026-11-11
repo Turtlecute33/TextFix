@@ -2,7 +2,7 @@
 #
 #   git tag v1.0.1 && git push origin v1.0.1
 #
-# Every target in the build matrix is published, zipped and attached to the release, so a new
+# Every target in the build matrix is packaged and attached to the release, so a new
 # platform appears in the release assets without touching this file.
 name: Release
 
@@ -47,18 +47,20 @@ jobs:
       # not depend on which platforms were built.
       - name: Checksum the assets
         working-directory: assets
-        run: sha256sum *.zip | tee SHA256SUMS.txt
+        run: sha256sum *.zip *.pkg.tar.zst | tee SHA256SUMS.txt
 
       # A signed statement, kept by GitHub, that these exact files came out of this workflow at
       # this commit. Unlike SHA256SUMS.txt, it cannot be replaced together with the files it
       # describes. Check a download with: gh attestation verify <zip> -R Turtlecute33/TextFix
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: assets/*.zip
+          subject-path: |
+            assets/*.zip
+            assets/*.pkg.tar.zst
 
       - name: Publish release
         working-directory: assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
-        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes *.zip SHA256SUMS.txt
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes *.zip *.pkg.tar.zst SHA256SUMS.txt

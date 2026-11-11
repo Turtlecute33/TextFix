@@ -1,5 +1,11 @@
 # Build output
 dist/
+build/
+pkg/
+*.pkg.tar.*
+.textfix-archive.*/
+packaging/omarchy/src/
+packaging/omarchy/pkg/
 bin/
 obj/
 *.zip
