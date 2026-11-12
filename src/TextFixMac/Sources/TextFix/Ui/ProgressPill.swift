@@ -141,11 +141,15 @@ final class ProgressPill {
     }
 
     private func makeBackdrop(frame: NSRect) -> NSView {
+        // Swift 6.2 comes with the macOS 26 SDK. An older SDK has no NSGlassEffectView, and its
+        // build uses the HUD material on all versions.
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: frame)
             glass.cornerRadius = frame.height / 2
             return glass
         }
+        #endif
         let effect = NSVisualEffectView(frame: frame)
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow

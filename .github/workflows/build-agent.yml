@@ -170,8 +170,9 @@ jobs:
         include:
           # One universal binary rather than two downloads: an Apple Silicon runner cross-compiles
           # the Intel slice, and the result is still under a megabyte.
+          # macos-26: its Xcode has the macOS 26 SDK. The progress pill needs it for Liquid Glass.
           - target: universal
-            runs-on: macos-15
+            runs-on: macos-26
 
     name: macos-${{ matrix.target }}
     runs-on: ${{ matrix.runs-on }}
