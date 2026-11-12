@@ -17,8 +17,6 @@ enum Motion {
     static let enterDuration: TimeInterval = 0.14
     /// Exit: quicker than the entrance, because nobody is waiting to watch something leave.
     static let exitDuration: TimeInterval = 0.11
-    /// One pass of the indeterminate sweep.
-    static let sweepPeriod: CFTimeInterval = 1.15
     /// The reduced-motion substitute: a slow crossfade in place, nothing travelling.
     static let reducedPulsePeriod: CFTimeInterval = 1.5
 

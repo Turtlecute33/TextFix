@@ -112,9 +112,9 @@ final class FixService {
         // Feedback goes up as soon as the target is known, rather than after the capture. The
         // pasteboard path spends the better part of a second in round trips, and a hotkey that
         // changes nothing on screen for that long reads as a dead key. It starts in its quiet form
-        // - present, not sweeping - and is promoted once the request is actually in flight.
+        // - still, dim dots - and is promoted once the request is actually in flight.
         switch TextTarget.capture(options: options, onTargetResolved: { [weak self] caretRect in
-            self?.showIndicator(config: config, caretRect: caretRect, sweeping: false)
+            self?.showIndicator(config: config, caretRect: caretRect, working: false)
         }) {
         case .failed(let message):
             // capture() has already put the pasteboard back; it is the only code that knows how far
@@ -142,9 +142,9 @@ final class FixService {
         token += 1
         let token = self.token
 
-        // Now that the real caret rectangle is known, settle the indicator onto it and promote it
-        // to the sweeping form. Repositioning does not restart the entrance animation.
-        showIndicator(config: config, caretRect: captured.caretRect, sweeping: true)
+        // The request goes out now, so promote the indicator to its moving form. It stays where
+        // it is and does not come in again.
+        showIndicator(config: config, caretRect: captured.caretRect, working: true)
 
         if config.dryRun {
             // Nothing leaves the machine: an obviously-transformed result proves the capture and
@@ -383,10 +383,10 @@ final class FixService {
 
     // ---- shared ----
 
-    private func showIndicator(config: AppConfig, caretRect: CGRect?, sweeping: Bool) {
+    private func showIndicator(config: AppConfig, caretRect: CGRect?, working: Bool) {
         switch config.indicatorValue {
-        case .caret:
-            CaretPulse.shared.show(caretRect: caretRect, sweeping: sweeping)
+        case .animation:
+            ProgressPill.shared.show(near: caretRect, working: working)
         case .menubar:
             statusItem?.setWorking(true)
         case .none:
@@ -395,7 +395,7 @@ final class FixService {
         indicatorShown = true
         // The tooltip is the only place the agent can say that a second press cancels, which is
         // otherwise completely undiscoverable.
-        statusItem?.setTooltip(sweeping
+        statusItem?.setTooltip(working
             ? "TextFix - fixing text… (press the hotkey again to cancel)"
             : "TextFix - reading text…")
     }
@@ -403,7 +403,7 @@ final class FixService {
     private func hideIndicator() {
         guard indicatorShown else { return }
         indicatorShown = false
-        CaretPulse.shared.hide()
+        ProgressPill.shared.hide()
         statusItem?.setWorking(false)
         statusItem?.setTooltip(StatusItem.idleTooltip)
     }

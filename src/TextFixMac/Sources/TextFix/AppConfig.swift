@@ -130,12 +130,14 @@ enum ReplaceMode: String {
 
 /// What the agent shows while a request is in flight.
 enum IndicatorStyle: String {
-    case caret
+    /// The progress pill at the bottom centre of the screen.
+    case animation
     case menubar
     case none
 
     static func parse(_ raw: String) -> IndicatorStyle {
-        IndicatorStyle(rawValue: raw.trimmingCharacters(in: .whitespaces).lowercased()) ?? .caret
+        // "caret" is the name from before 1.6, when the indicator was below the caret.
+        IndicatorStyle(rawValue: raw.trimmingCharacters(in: .whitespaces).lowercased()) ?? .animation
     }
 }
 
@@ -229,8 +231,8 @@ final class AppConfig: Codable {
     /// modifier state on their own schedule and drop a chord that arrives in one tick.
     var keyEventDelayMs: Int = 8
 
-    /// "caret", "menubar" or "none".
-    var indicator: String = IndicatorStyle.caret.rawValue
+    /// "animation", "menubar" or "none".
+    var indicator: String = IndicatorStyle.animation.rawValue
 
     var notifyOnError: Bool = true
 
@@ -295,7 +297,7 @@ final class AppConfig: Codable {
         selectionProbeMs = int(.selectionProbeMs, 350)
         copyTimeoutMs = int(.copyTimeoutMs, 700)
         keyEventDelayMs = int(.keyEventDelayMs, 8)
-        indicator = string(.indicator, IndicatorStyle.caret.rawValue)
+        indicator = string(.indicator, IndicatorStyle.animation.rawValue)
         notifyOnError = bool(.notifyOnError, true)
         replaceOnlyIfFocusUnchanged = bool(.replaceOnlyIfFocusUnchanged, true)
         skipPasswordFields = bool(.skipPasswordFields, true)

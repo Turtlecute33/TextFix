@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         hotkeys.uninstall()
         fixService?.shutdown()
-        CaretPulse.shared.shutdown()
+        ProgressPill.shared.shutdown()
         Toast.shared.shutdown()
         statusItem?.shutdown()
         DistributedNotificationCenter.default().removeObserver(self)

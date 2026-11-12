@@ -217,7 +217,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         indicatorPopUp.removeAllItems()
         indicatorPopUp.addItems(withTitles: [
-            "Pulse below the caret", "Menu bar icon only", "Show nothing",
+            "Animation at the bottom of the screen", "Menu bar icon only", "Show nothing",
         ])
         stack.addArrangedSubview(Controls.row("While working", indicatorPopUp, labelWidth: Self.labelWidth))
 
@@ -408,7 +408,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         indicatorPopUp.selectItem(at: {
             switch config.indicatorValue {
-            case .caret: return 0
+            case .animation: return 0
             case .menubar: return 1
             case .none: return 2
             }
@@ -534,7 +534,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             switch indicatorPopUp.indexOfSelectedItem {
             case 1: return IndicatorStyle.menubar.rawValue
             case 2: return IndicatorStyle.none.rawValue
-            default: return IndicatorStyle.caret.rawValue
+            default: return IndicatorStyle.animation.rawValue
             }
         }()
         result.replaceMode = replaceModePopUp.indexOfSelectedItem == 1
