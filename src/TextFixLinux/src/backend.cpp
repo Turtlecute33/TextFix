@@ -39,12 +39,18 @@ QVariantList Backend::models(const QString &provider) const { return Config::mod
 
 QString Backend::defaultPrompt(int action) const { return action == 1 ? Config::rewritePrompt() : Config::fixPrompt(); }
 
+// Where the desktop has no place for the pill (GNOME on Wayland), "animation" shows the
+// notification instead.
+bool Backend::animate() const { return m_animation && m_config.value("indicator").toString() == "animation"; }
+
 void Backend::announce(const QString &message, Notice kind) {
     emit notice(message, kind);
+    if (kind != Progress) emit pillHidden();
     switch (kind) {
     case Progress:
+        if (animate()) emit pillShown(false);
         // The notification stays for the time of the request, then the result replaces it.
-        if (m_config.value("indicator").toString() != "none")
+        else if (m_config.value("indicator").toString() != "none")
             emit notify(message, qBound(5000, m_config.value("requestBudgetMs").toInt(90000), 300000) + 2000);
         break;
     case Done: emit clearNotification(); break;
@@ -207,6 +213,7 @@ void Backend::captured(const QString &text) {
     m_prompt = m_action.value("prompt").toString();
     if (m_prompt.trimmed().isEmpty()) m_prompt = Config::fixPrompt();
     setStatus(tr("Waiting for the answer… Press the shortcut again to cancel."));
+    if (animate()) emit pillShown(true);
     if (m_config.value("dryRun").toBool()) {
         const quint64 generation = m_generation;
         QTimer::singleShot(0, this, [this, generation] { if (m_busy && m_generation == generation) completed(m_input.toUpper(), {}); });

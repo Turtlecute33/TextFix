@@ -104,8 +104,8 @@ QJsonObject Config::defaults() {
     return {{"provider", "openrouter"}, {"model", defaultModel()}, {"customModel", ""},
         {"zeroDataRetention", true}, {"allowReasoning", false}, {"maxInputLength", 10000},
         {"requestBudgetMs", 90000}, {"restoreClipboard", true}, {"clipboardRestoreDelayMs", 300},
-        {"selectionProbeMs", 400}, {"copyTimeoutMs", 900}, {"indicator", "notification"},
-        {"notifyOnError", true}, {"dryRun", false},
+        {"selectionProbeMs", 400}, {"copyTimeoutMs", 900}, {"indicator", "animation"},
+        {"notifyOnError", true}, {"dryRun", false}, {"settingsVersion", 2},
         {"actions", QJsonArray{
             QJsonObject{{"name", "Fix"}, {"enabled", true}, {"prompt", fixPrompt()}, {"model", ""}, {"wholeTextWhenNoSelection", true}},
             QJsonObject{{"name", "Rewrite"}, {"enabled", true}, {"prompt", rewritePrompt()}, {"model", ""}, {"wholeTextWhenNoSelection", true}}}}};
@@ -124,6 +124,11 @@ QJsonObject Config::load(const QString &directory, QString *error) {
     }
     const auto saved = doc.object();
     for (auto it = saved.begin(); it != saved.end(); ++it) result.insert(it.key(), it.value());
+    // Before version 2 the only choices were a notification or nothing, so a notification meant
+    // "show that a fix runs". The animation does that now.
+    if (saved.value("settingsVersion").toInt(1) < 2 && saved.value("indicator").toString() == "notification")
+        result.insert("indicator", "animation");
+    result.insert("settingsVersion", 2);
     // Merge each action separately so an older or hand-written config keeps new defaults.
     auto actions = defaults().value("actions").toArray();
     const auto savedActions = saved.value("actions").toArray();

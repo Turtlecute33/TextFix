@@ -55,7 +55,7 @@ ApplicationWindow {
         showModels(s.model, s.customModel)
         retention.checked = s.zeroDataRetention
         reasoning.checked = s.allowReasoning
-        progress.checked = s.indicator !== "none"
+        progress.currentIndex = s.indicator === "none" ? 2 : s.indicator === "notification" ? 1 : 0
         failures.checked = s.notifyOnError
         restoreClipboard.checked = s.restoreClipboard
         login.checked = backend.autostart()
@@ -76,7 +76,7 @@ ApplicationWindow {
         next.customModel = custom.text.trim()
         next.zeroDataRetention = retention.checked
         next.allowReasoning = reasoning.checked
-        next.indicator = progress.checked ? "notification" : "none"
+        next.indicator = ["animation", "notification", "none"][progress.currentIndex]
         next.notifyOnError = failures.checked
         next.restoreClipboard = restoreClipboard.checked
         next.dryRun = dryRun.checked
@@ -204,7 +204,16 @@ ApplicationWindow {
             ColumnLayout {
                 width: parent.width
                 spacing: 4
-                CheckBox { id: progress; text: qsTr("Show a notification while a fix runs"); onToggled: win.dirty = true }
+                Label { text: qsTr("While a fix runs") }
+                ComboBox {
+                    id: progress
+                    model: [qsTr("Animation at the bottom of the screen"), qsTr("Notification"), qsTr("Nothing")]
+                    Layout.fillWidth: true
+                    Accessible.name: qsTr("While a fix runs")
+                    onActivated: win.dirty = true
+                }
+                Hint { text: qsTr("GNOME has no place for the animation. There, TextFix shows the notification.") }
+                Item { implicitHeight: 8 }
                 CheckBox { id: failures; text: qsTr("Show failures on screen"); onToggled: win.dirty = true }
                 CheckBox { id: restoreClipboard; text: qsTr("Put my clipboard back afterwards"); onToggled: win.dirty = true }
                 CheckBox { id: login; text: qsTr("Start TextFix when I log in"); onToggled: win.dirty = true }

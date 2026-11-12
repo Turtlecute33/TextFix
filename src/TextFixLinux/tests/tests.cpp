@@ -2,6 +2,7 @@
 #include "aiclient.h"
 #include "backend.h"
 #include "config.h"
+#include "pillscene.h"
 #include "theme.h"
 #include <QDir>
 #include <QFile>
@@ -18,6 +19,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 #include <functional>
+#include <vector>
 
 class FakeDesktop : public Desktop {
 public:
@@ -298,6 +300,80 @@ private slots:
         backend.start(0);
         QCOMPARE(shown.size(), 1);
         QVERIFY(shown[0][0].toString().contains("terminal"));
+    }
+    void animationShowsThePillOrTheNotification() {
+        QTemporaryDir dir;
+        auto config = Config::defaults();
+        QCOMPARE(config.value("indicator").toString(), "animation");
+        config.insert("dryRun", true);
+        config.insert("selectionProbeMs", 100);
+        QString error;
+        QVERIFY(Config::save(dir.path(), config, &error));
+        FakeDesktop desktop;
+        Backend backend(&desktop, dir.path());
+        backend.setAnimationAvailable(true);
+        QSignalSpy shown(&backend, &Backend::notify);
+        QSignalSpy pill(&backend, &Backend::pillShown);
+        QSignalSpy pillGone(&backend, &Backend::pillHidden);
+        backend.start(0);
+        QTRY_VERIFY(!backend.busy());
+        QCOMPARE(desktop.pasted, "ROUGH TEXT");
+        QCOMPARE(shown.size(), 0);
+        QCOMPARE(pill.size(), 2);
+        QCOMPARE(pill[0][0].toBool(), false);
+        QCOMPARE(pill[1][0].toBool(), true);
+        QVERIFY(pillGone.size() >= 1);
+        // Without a place for the pill, the same setting shows the notification.
+        backend.setAnimationAvailable(false);
+        backend.start(0);
+        QTRY_VERIFY(!backend.busy());
+        QCOMPARE(pill.size(), 2);
+        QCOMPARE(shown.size(), 1);
+    }
+    void oldNotificationSettingMovesToTheAnimation() {
+        QTemporaryDir dir;
+        QString error;
+        write(dir.filePath("config.json"), R"({"indicator":"notification"})");
+        QCOMPARE(Config::load(dir.path(), &error).value("indicator").toString(), "animation");
+        write(dir.filePath("config.json"), R"({"indicator":"notification","settingsVersion":2})");
+        QCOMPARE(Config::load(dir.path(), &error).value("indicator").toString(), "notification");
+        write(dir.filePath("config.json"), R"({"indicator":"none"})");
+        QCOMPARE(Config::load(dir.path(), &error).value("indicator").toString(), "none");
+        QVERIFY(error.isEmpty());
+    }
+    void pillDotsAreStillInTheQuietStageAndTheExitEnds() {
+        PillScene::Timeline timeline;
+        PillScene::Frame frame;
+        PillScene::frameAt(2.0, timeline, frame);
+        QVERIFY(frame.settled);
+        QCOMPARE(frame.count, 4);
+        for (int i = 0; i < 3; ++i) QCOMPARE(frame.shapes[i].r, PillScene::DotRadius);
+        QCOMPARE(frame.shapes[3].r, 0.0);
+        timeline.workingAt = 2.0;
+        PillScene::frameAt(2.6, timeline, frame);
+        QVERIFY(!frame.settled);
+        QVERIFY(frame.shapes[3].r > PillScene::DotRadius);
+        timeline.hidingAt = 3.0;
+        PillScene::frameAt(3.0 + PillScene::ExitDuration + 0.01, timeline, frame);
+        QVERIFY(frame.finished);
+    }
+    void pillDrawsGlassAndDotsInsideItsSurface() {
+        PillScene::Timeline timeline;
+        PillScene::Frame frame;
+        PillScene::frameAt(2.0, timeline, frame);
+        double scale, opacity;
+        PillScene::stage(2.0, timeline, scale, opacity);
+        QCOMPARE(opacity, 1.0);
+        QVERIFY(qAbs(scale - 1) < 1e-3);
+        const int width = PillScene::SurfaceWidth, height = PillScene::SurfaceHeight;
+        std::vector<uint32_t> pixels(size_t(width) * size_t(height));
+        PillScene::render(frame, scale, opacity, pixels.data(), width, height, 1);
+        auto at = [&](int x, int y) { return pixels[size_t(y) * size_t(width) + size_t(x)]; };
+        auto red = [](uint32_t pixel) { return int(pixel >> 16 & 0xff); };
+        QCOMPARE(at(0, 0), 0u);
+        QVERIFY((at(width / 2, height / 2) >> 24) > 200);
+        // The middle dot is much brighter than the glass between the dots.
+        QVERIFY(red(at(width / 2, height / 2)) > red(at(width / 2 + 6, height / 2)) + 60);
     }
     void focusChangePreventsPaste() {
         QTemporaryDir dir;

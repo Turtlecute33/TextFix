@@ -3,6 +3,7 @@
 #include "backend.h"
 #include "config.h"
 #include "desktop.h"
+#include "pill.h"
 #include "theme.h"
 #include "tray.h"
 #include <QCryptographicHash>
@@ -144,6 +145,10 @@ int main(int argc, char *argv[]) {
     Tray tray;
     QObject::connect(&backend, &Backend::notify, &tray, &Tray::notify);
     QObject::connect(&backend, &Backend::clearNotification, &tray, &Tray::clearNotification);
+    Pill pill;
+    backend.setAnimationAvailable(pill.available());
+    QObject::connect(&backend, &Backend::pillShown, &pill, &Pill::show);
+    QObject::connect(&backend, &Backend::pillHidden, &pill, &Pill::hide);
     QObject::connect(&tray, &Tray::cancel, &backend, &Backend::cancel);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &backend, &Backend::cancel);
     // The theme also loads the language, and the notifications need it before Settings opens.

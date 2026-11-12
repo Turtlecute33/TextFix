@@ -93,7 +93,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential qt6-base-dev qt6-declarative-dev qt6-svg-dev \
-            qt6-wayland qml6-module-qtquick qml6-module-qtquick-controls \
+            libwayland-dev pkg-config qt6-wayland qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-window \
             qml6-module-qtqml-workerscript qml6-module-qtquick-templates \
             libsecret-tools wl-clipboard xdotool x11-utils zip desktop-file-utils
@@ -135,7 +135,7 @@ jobs:
     container: archlinux:base-devel
     steps:
       - name: Install Arch build dependencies
-        run: pacman -Syu --noconfirm --needed git nodejs qt6-base qt6-declarative qt6-svg qt6-wayland wl-clipboard hyprland libsecret zip
+        run: pacman -Syu --noconfirm --needed git nodejs qt6-base qt6-declarative qt6-svg qt6-wayland wayland pkgconf wl-clipboard hyprland libsecret zip
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref }}

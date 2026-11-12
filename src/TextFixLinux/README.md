@@ -40,7 +40,7 @@ startup and shortcut options are specific to Linux.
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `indicator` | `notification` | `notification` shows one notification while a fix runs. `none` shows nothing. |
+| `indicator` | `animation` | `animation` shows a small capsule at the bottom centre of the screen while a fix runs. `notification` shows one notification. `none` shows nothing. |
 | `notifyOnError` | `true` | Show failures as a notification. |
 | `restoreClipboard` | `true` | Put your clipboard back after the paste. |
 | `clipboardRestoreDelayMs` | `300` | Raise it if an app pastes the old clipboard content. |
@@ -54,8 +54,11 @@ you. The next save keeps the old file as `config.json.bad`.
 
 Bind `textfix fix` and `textfix rewrite` in your desktop shortcut settings. Commands
 start the background agent on demand and forward subsequent requests to that one
-process, which takes about 30 ms. A second invocation while busy cancels. One notification
-shows while a fix runs and goes away when the text is in place; an error replaces it.
+process, which takes about 30 ms. A second invocation while busy cancels. While a fix runs, a
+small capsule with moving dots shows at the bottom centre of the screen, and goes away when the
+text is in place; an error shows as a notification. The capsule is a Wayland layer surface with
+the namespace `textfix` on Hyprland, KDE Plasma and Sway, and a window on X11 (transparency needs a
+compositing manager). GNOME on Wayland has no layer shell, so there TextFix shows a notification.
 Closing Settings hides the window;
 the tray icon opens it again. Middle-clicking the tray cancels; `textfix quit` exits.
 The tray requires a StatusNotifier host; the commands work without one.
@@ -152,9 +155,9 @@ redirects. TextFix keeps no log, and it never shows or stores a provider error b
 
 ## Build and test
 
-Needs a C++17 compiler, make, qmake6, Qt 6 base/declarative/SVG development packages,
-and zip. On Ubuntu add `qt6-base-dev qt6-declarative-dev qt6-svg-dev`; Arch includes
-the development files in its Qt packages. No third-party source downloads are used.
+Needs a C++17 compiler, make, qmake6, pkg-config, Qt 6 base/declarative/SVG development packages,
+the Wayland client library and zip. On Ubuntu add `qt6-base-dev qt6-declarative-dev qt6-svg-dev
+libwayland-dev pkg-config`; Arch includes the development files in its Qt and `wayland` packages. No third-party source downloads are used.
 
 ```sh
 ./build-linux.sh --test --zip --version 1.5.0

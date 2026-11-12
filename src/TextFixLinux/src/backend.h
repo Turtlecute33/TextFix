@@ -28,6 +28,8 @@ public:
     Q_INVOKABLE QVariantList models(const QString &provider) const;
     Q_INVOKABLE QString defaultPrompt(int action) const;
     void retranslate();
+    // True when this desktop has a place for the progress pill (see pill.h).
+    void setAnimationAvailable(bool available) { m_animation = available; }
     void start(int action, bool clipboardOnly = false);
     void flushRestore();
 signals:
@@ -38,6 +40,9 @@ signals:
     // What the desktop shows, after the indicator and notifyOnError settings.
     void notify(const QString &message, int timeout);
     void clearNotification();
+    // The progress pill: quiet while the text is read, working once the request is out.
+    void pillShown(bool working);
+    void pillHidden();
 private:
     void probe(bool whole);
     void captured(const QString &text);
@@ -47,6 +52,7 @@ private:
     void restoreCapture();
     void collapseSelection();
     void setStatus(const QString &message);
+    bool animate() const;
     Desktop *m_desktop;
     QString m_directory, m_status, m_loadError, m_readyStatus;
     QJsonObject m_config, m_action;
@@ -57,6 +63,7 @@ private:
     ClipboardData m_saved, m_pending;
     QString m_marker, m_clipboardToken, m_input, m_prompt, m_key;
     QSet<QString> m_zdrWarned;
+    bool m_animation = false;
     bool m_busy = false, m_clipboardOnly = false, m_whole = false, m_settled = false, m_loadWarned = false;
     quint64 m_generation = 0;
 };
