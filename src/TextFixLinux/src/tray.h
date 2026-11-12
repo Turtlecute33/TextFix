@@ -23,7 +23,11 @@ public:
     QString icon() const { return "textfix"; }
     bool itemIsMenu() const { return false; }
     QDBusObjectPath menu() const { return QDBusObjectPath("/NO_DBUSMENU"); }
-    static void notify(const QString &message);
+    // TextFix shows one notification at a time. A new message replaces the one on screen, so
+    // the progress message and the result do not make a stack. These two are not slots on
+    // purpose: only slots go on the bus, and no other program must show text as TextFix.
+    void notify(const QString &message, int timeout);
+    void clearNotification();
 public slots:
     void Activate(int, int) { emit openSettings(); }
     void ContextMenu(int, int) { emit openSettings(); }
@@ -33,4 +37,9 @@ signals:
     void cancel();
 private:
     void registerItem();
+    void close(uint id);
+    uint m_notification = 0;
+    quint64 m_serial = 0;
+    int m_waiting = 0;
+    bool m_clearWhenKnown = false;
 };

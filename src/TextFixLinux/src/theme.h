@@ -13,11 +13,14 @@ public:
     bool isEmpty() const override { return false; }
 };
 
+// Colours and language. On Omarchy both follow the desktop live. On other desktops the
+// colours follow the light or dark setting of the system, and the language its locale.
 class Theme : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString accent MEMBER m_accent NOTIFY changed)
     Q_PROPERTY(QString background MEMBER m_background NOTIFY changed)
     Q_PROPERTY(QString foreground MEMBER m_foreground NOTIFY changed)
+    Q_PROPERTY(bool dark MEMBER m_dark NOTIFY changed)
     Q_PROPERTY(int radius MEMBER m_radius NOTIFY changed)
     Q_PROPERTY(QString language MEMBER m_language NOTIFY changed)
 public:
@@ -28,7 +31,8 @@ signals:
     void changed();
 private:
     QString m_current, m_languageFile;
-    QString m_accent = "#FFD60A", m_background = "#151519", m_foreground = "#eeeeee", m_language;
+    QString m_accent, m_background, m_foreground, m_language;
+    bool m_dark = true;
     int m_radius = 0;
     QFileSystemWatcher m_watcher;
     Catalog m_catalog;

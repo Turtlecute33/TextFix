@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "theme.h"
 #include "desktop.h"
+#include <QColor>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -9,6 +10,7 @@
 #include <QLocale>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QStyleHints>
 
 Theme::Theme(const QString &current, const QString &languageFile, QObject *parent)
     : QObject(parent),
@@ -16,6 +18,9 @@ Theme::Theme(const QString &current, const QString &languageFile, QObject *paren
       m_languageFile(languageFile.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/omarchy/language" : languageFile) {
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, &Theme::reload);
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &Theme::reload);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &Theme::reload);
+#endif
     QGuiApplication::installTranslator(&m_catalog);
     reload();
 }
@@ -38,15 +43,27 @@ void Theme::reload() {
         const auto match = QRegularExpression("^\\s*" + key + "\\s*=\\s*[\"'](#[0-9a-fA-F]{6})[\"']", QRegularExpression::MultilineOption).match(data);
         return match.hasMatch() ? match.captured(1) : fallback;
     };
-    m_accent = color("accent", "#FFD60A");
-    m_background = color("background", "#151519");
-    m_foreground = color("foreground", "#eeeeee");
+    // An Omarchy theme names its mode. Without a theme file, follow the system (Qt 6.5 and
+    // later can tell); the default is dark.
+    const auto mode = QRegularExpression("^\\s*mode\\s*=\\s*[\"'](light|dark)[\"']", QRegularExpression::MultilineOption).match(data);
+    const QString themeBackground = color("background", {});
+    m_dark = true;
+    if (mode.hasMatch()) m_dark = mode.captured(1) == "dark";
+    else if (!themeBackground.isEmpty()) m_dark = QColor(themeBackground).lightness() < 128;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    else if (data.isEmpty()) m_dark = QGuiApplication::styleHints()->colorScheme() != Qt::ColorScheme::Light;
+#endif
+    // The light accent is darker than the dark one: the accent is also a text colour.
+    m_accent = color("accent", m_dark ? "#FFD60A" : "#8A6A00");
+    m_background = color("background", m_dark ? "#151519" : "#F7F7F5");
+    m_foreground = color("foreground", m_dark ? "#eeeeee" : "#1B1B1F");
     if (!qEnvironmentVariableIsEmpty("HYPRLAND_INSTANCE_SIGNATURE")) {
         auto result = runTool("hyprctl", {"-j", "getoption", "decoration:rounding"}, {}, 500);
         if (result.ok) m_radius = qBound(0, QJsonDocument::fromJson(result.output).object().value("int").toInt(), 30);
     }
     QFile language(m_languageFile);
-    QString code = "en";
+    // Without the Omarchy language file, use the language of the system.
+    QString code = QLocale::system().bcp47Name();
     if (language.open(QIODevice::ReadOnly)) code = QString::fromUtf8(language.readAll()).trimmed();
     if (!QRegularExpression("^[a-z]{2,3}(-[A-Za-z]{2,4})?$").match(code).hasMatch()) code = "en";
     m_language = code;

@@ -54,6 +54,24 @@ int main(int argc, char *argv[]) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
         qputenv("QT_QPA_PLATFORMTHEME", "");
     }
+    const auto session = QCryptographicHash::hash((qEnvironmentVariable("WAYLAND_DISPLAY") + ":" + qEnvironmentVariable("DISPLAY")).toUtf8(), QCryptographicHash::Sha256).toHex().left(12);
+    const QString socketName = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + "/textfix-" + session + ".sock";
+    const QByteArray request = (command + (arguments.contains("--rewrite") ? " --rewrite" : "") + "\n").toUtf8();
+    auto forward = [&] {
+        QLocalSocket socket;
+        socket.connectToServer(socketName);
+        if (!socket.waitForConnected(500)) return false;
+        socket.write(request);
+        socket.waitForBytesWritten(500);
+        return socket.waitForReadyRead(2000) && socket.readLine().trimmed() == "ok";
+    };
+    if (command != "doctor" && command != "filter") {
+        // The usual case: a shortcut starts this program while the agent runs. Pass the command
+        // on without a display connection, which is most of the start time of a Qt GUI program.
+        QCoreApplication client(argc, argv);
+        if (forward()) return 0;
+        if (command == "cancel" || command == "quit") return 0;
+    }
     QGuiApplication app(argc, argv);
     app.setApplicationName("textfix");
     app.setApplicationVersion(TEXTFIX_VERSION);
@@ -110,18 +128,6 @@ int main(int argc, char *argv[]) {
         return app.exec();
     }
 
-    const auto session = QCryptographicHash::hash((qEnvironmentVariable("WAYLAND_DISPLAY") + ":" + qEnvironmentVariable("DISPLAY")).toUtf8(), QCryptographicHash::Sha256).toHex().left(12);
-    const QString socketName = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + "/textfix-" + session + ".sock";
-    auto forward = [&]() {
-        QLocalSocket socket;
-        socket.connectToServer(socketName);
-        if (!socket.waitForConnected(500)) return false;
-        socket.write((command + (arguments.contains("--rewrite") ? " --rewrite" : "") + "\n").toUtf8());
-        socket.waitForBytesWritten(500);
-        return socket.waitForReadyRead(2000) && socket.readLine().trimmed() == "ok";
-    };
-    if (forward()) return 0;
-    if (command == "cancel" || command == "quit") return 0;
     QLockFile lock(socketName + ".lock");
     if (!lock.tryLock(0)) {
         if (forward()) return 0;
@@ -136,23 +142,32 @@ int main(int argc, char *argv[]) {
     LinuxDesktop desktop;
     Backend backend(&desktop);
     Tray tray;
-    QObject::connect(&backend, &Backend::notice, &tray, &Tray::notify);
+    QObject::connect(&backend, &Backend::notify, &tray, &Tray::notify);
+    QObject::connect(&backend, &Backend::clearNotification, &tray, &Tray::clearNotification);
     QObject::connect(&tray, &Tray::cancel, &backend, &Backend::cancel);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &backend, &Backend::cancel);
-    std::unique_ptr<Theme> theme;
+    // The theme also loads the language, and the notifications need it before Settings opens.
+    Theme theme;
+    backend.retranslate();
+    QObject::connect(&theme, &Theme::changed, &backend, &Backend::retranslate);
     std::unique_ptr<QQmlApplicationEngine> engine;
     QQuickStyle::setStyle("Material");
     auto openSettings = [&] {
         if (!engine) {
-            theme = std::make_unique<Theme>();
-            backend.retranslate();
             engine = std::make_unique<QQmlApplicationEngine>();
-            QObject::connect(theme.get(), &Theme::changed, &backend, &Backend::retranslate);
-            QObject::connect(theme.get(), &Theme::changed, engine.get(), &QQmlEngine::retranslate);
-            engine->rootContext()->setContextProperty("theme", theme.get());
+            QObject::connect(&theme, &Theme::changed, engine.get(), &QQmlEngine::retranslate);
+            engine->rootContext()->setContextProperty("theme", &theme);
             engine->rootContext()->setContextProperty("backend", &backend);
             engine->load(QUrl("qrc:/Main.qml"));
-            if (engine->rootObjects().isEmpty()) { app.exit(1); return; }
+            if (engine->rootObjects().isEmpty()) {
+                // The agent can work without the window, so it stays. The usual cause is a
+                // Qt Quick Controls package that is not installed.
+                engine.reset();
+                const QString message = QObject::tr("Settings could not open. Install the Qt Quick Controls packages that the TextFix guide lists.");
+                QTextStream(stderr) << message << '\n';
+                tray.notify(message, 10000);
+                return;
+            }
         }
         QMetaObject::invokeMethod(engine->rootObjects().first(), "open");
     };
@@ -181,6 +196,6 @@ int main(int argc, char *argv[]) {
             read();
         }
     });
-    QTimer::singleShot(0, &app, [&] { dispatch(command + (arguments.contains("--rewrite") ? " --rewrite" : "")); });
+    QTimer::singleShot(0, &app, [&] { dispatch(QString::fromUtf8(request).trimmed()); });
     return app.exec();
 }

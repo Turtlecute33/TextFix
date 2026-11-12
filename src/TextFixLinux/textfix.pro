@@ -11,4 +11,10 @@ HEADERS += src/config.h src/aiclient.h src/desktop.h src/backend.h src/theme.h s
 SOURCES += src/main.cpp src/config.cpp src/aiclient.cpp src/desktop.cpp src/backend.cpp src/theme.cpp src/tray.cpp
 RESOURCES += src/resources.qrc
 QMAKE_CXXFLAGS_RELEASE += -Os
-QMAKE_LFLAGS_RELEASE += -Wl,--as-needed
+linux {
+    # qmake does not read the CXXFLAGS and LDFLAGS that makepkg and dpkg set, so the usual
+    # hardening is given here: a PIE with full RELRO, stack protection and fortified libc calls.
+    QMAKE_CXXFLAGS_RELEASE += -fPIE -fstack-protector-strong -fstack-clash-protection \
+        -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -ffunction-sections -fdata-sections
+    QMAKE_LFLAGS_RELEASE += -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,--as-needed -Wl,--gc-sections
+}

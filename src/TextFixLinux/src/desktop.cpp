@@ -3,6 +3,7 @@
 #include <QClipboard>
 #include <QElapsedTimer>
 #include <QGuiApplication>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMimeData>
@@ -40,10 +41,15 @@ bool Desktop::setText(const QString &text) {
     return write({{{"text/plain;charset=utf-8", text.toUtf8()}}, true});
 }
 
-bool Desktop::isTerminal(const QString &app) {
-    static const QRegularExpression pattern("(kitty|alacritty|ghostty|foot|wezterm|gnome-terminal|konsole|xterm|tilix|terminator)",
-                                            QRegularExpression::CaseInsensitiveOption);
-    return pattern.match(app).hasMatch();
+// A terminal shows its scrollback as one field, and a paste into a shell or an editor in
+// command mode can run what the model wrote. The other agents refuse terminals for this reason.
+bool Desktop::isTerminal(const Focus &focus) {
+    static const QRegularExpression pattern(
+        "\\b(kitty|alacritty|ghostty|foot|footclient|wezterm|gnome-terminal|ptyxis|kgx|org\\.gnome\\.Console|konsole"
+        "|xterm|urxvt|tilix|terminator|xfce4-terminal|lxterminal|qterminal|terminology|blackbox)\\b"
+        "|\\borg\\.omarchy\\.|\\bTUI\\.",
+        QRegularExpression::CaseInsensitiveOption);
+    return focus.terminal || pattern.match(focus.app).hasMatch();
 }
 
 LinuxDesktop::LinuxDesktop()
@@ -74,7 +80,11 @@ Focus LinuxDesktop::focus() {
         auto object = QJsonDocument::fromJson(result.output).object();
         const QString id = object.value("address").toString();
         if (!QRegularExpression("^0x[0-9a-fA-F]+$").match(id).hasMatch() || id == "0x0") return {};
-        return {id, object.value("class").toString()};
+        // Omarchy tags each terminal window. A dynamic tag has "*" at its end.
+        bool terminal = false;
+        for (const auto &tag : object.value("tags").toArray())
+            if (tag.toString().remove('*') == "terminal") terminal = true;
+        return {id, object.value("class").toString(), terminal};
     }
     if (!m_wayland) {
         auto result = runTool("xdotool", {"getwindowfocus"});
@@ -87,19 +97,21 @@ Focus LinuxDesktop::focus() {
     return {};
 }
 
-bool LinuxDesktop::shortcut(const Focus &target, const QString &key, bool terminal) {
+bool LinuxDesktop::shortcut(const Focus &target, const QString &key) {
     if (target.id.isEmpty() || focus().id != target.id) return false;
-    const QString mods = terminal && key != "A" ? "CTRL SHIFT" : "CTRL";
+    // "Right" goes with no modifier: it puts the caret at the end of a selection.
+    const bool plain = key == "Right";
+    const QString mods = plain ? "" : "CTRL";
     if (m_hyprland) {
         // IDs and keys are validated; no input text or secrets ever become shell/Lua code.
-        if (!QStringList{"A", "C", "V"}.contains(key)) return false;
+        if (!QStringList{"A", "C", "V", "Right"}.contains(key)) return false;
         const auto result = m_lua
             ? runTool("hyprctl", {"eval", "hl.dispatch(hl.dsp.send_shortcut({mods=\"" + mods + "\",key=\"" + key + "\",window=\"address:" + target.id + "\"}))"})
             : runTool("hyprctl", {"dispatch", "sendshortcut", mods + "," + key + ",address:" + target.id});
         const QByteArray lower = result.output.toLower();
         return result.ok && !lower.contains("error") && !lower.contains("unknown") && !lower.contains("invalid");
     }
-    return !m_wayland && runTool("xdotool", {"key", "--clearmodifiers", terminal && key != "A" ? "ctrl+shift+" + key.toLower() : "ctrl+" + key.toLower()}).ok;
+    return !m_wayland && runTool("xdotool", {"key", "--clearmodifiers", plain ? key : "ctrl+" + key.toLower()}).ok;
 }
 
 ClipboardData LinuxDesktop::snapshot() {

@@ -35,16 +35,54 @@ bool Backend::autostart() const {
     return QFile::exists(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/autostart/textfix.desktop");
 }
 
+QVariantList Backend::models(const QString &provider) const { return Config::models(provider); }
+
+QString Backend::defaultPrompt(int action) const { return action == 1 ? Config::rewritePrompt() : Config::fixPrompt(); }
+
+void Backend::announce(const QString &message, Notice kind) {
+    emit notice(message, kind);
+    switch (kind) {
+    case Progress:
+        // The notification stays for the time of the request, then the result replaces it.
+        if (m_config.value("indicator").toString() != "none")
+            emit notify(message, qBound(5000, m_config.value("requestBudgetMs").toInt(90000), 300000) + 2000);
+        break;
+    case Done: emit clearNotification(); break;
+    case Info: emit notify(message, 5000); break;
+    case Error:
+        if (m_config.value("notifyOnError").toBool(true)) emit notify(message, 8000);
+        else emit clearNotification();
+        break;
+    }
+}
+
 bool Backend::save(const QVariantMap &values, const QString &key, bool startAtLogin) {
     if (m_busy) { setStatus(tr("Cancel the current request before saving.")); return false; }
-    QString error;
-    // Refuse to overwrite a malformed or unreadable configuration, including one changed
-    // outside the app since launch. The user's prompts must remain recoverable.
-    Config::load(m_directory, &error);
-    if (!error.isEmpty()) { setStatus(error); return false; }
     auto next = QJsonObject::fromVariantMap(values);
     const auto provider = next.value("provider").toString();
     if (provider != "openrouter" && provider != "payperq") { setStatus(tr("Choose a supported provider.")); return false; }
+    if (next.value("model").toString() == "custom") {
+        const QString custom = next.value("customModel").toString().trimmed();
+        if (custom.isEmpty()) { setStatus(tr("Enter a custom model slug, or pick one from the list.")); return false; }
+        if (!Config::validModelSlug(custom)) {
+            setStatus(tr("That does not look like a model slug. Use author/model, for example openai/gpt-4o-mini.")); return false;
+        }
+        next.insert("customModel", custom);
+    } else if (next.value("model").toString().trimmed().isEmpty()) {
+        next.insert("model", Config::defaultModel());
+    }
+    QString error;
+    Config::load(m_directory, &error);
+    if (!error.isEmpty()) {
+        // The file that TextFix could not read is the work of the user. Keep it adjacent to
+        // the new file, as the other agents do. Do not write over it.
+        const QString path = m_directory + "/config.json";
+        QFile::remove(path + ".bad");
+        if (!QFile::copy(path, path + ".bad")) {
+            setStatus(tr("Could not keep the old config.json as config.json.bad. Nothing was saved.")); return false;
+        }
+        error.clear();
+    }
     if (!key.trimmed().isEmpty() && !Config::storeSecret(provider, key.trimmed(), &error)) { setStatus(error); return false; }
     if (!Config::save(m_directory, next, &error)) { setStatus(error); return false; }
     const QString autostartDirectory = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/autostart";
@@ -62,6 +100,7 @@ bool Backend::save(const QVariantMap &values, const QString &key, bool startAtLo
         setStatus(tr("Settings saved, but the login entry could not be removed.")); return false;
     }
     m_config = next;
+    m_loadError.clear();
     emit settingsChanged();
     setStatus(tr("Saved"));
     return true;
@@ -71,13 +110,26 @@ void Backend::start(int action, bool clipboardOnly) {
     if (m_busy) { cancel(); return; }
     flushRestore();
     QString error;
+    // A config.json with an error does not stop the fix. This request uses the default
+    // settings, as on Windows and macOS, and the user gets the message after it.
     m_config = Config::load(m_directory, &error);
-    if (!error.isEmpty()) { fail(error); return; }
+    if (error != m_loadError) m_loadWarned = false;
+    m_loadError = error;
     error = m_desktop->check(clipboardOnly);
     if (!error.isEmpty()) { fail(error); return; }
     if (action < 0 || action > 1) { fail(tr("Unknown action.")); return; }
     m_action = m_config.value("actions").toArray().at(action).toObject();
     if (!m_action.value("enabled").toBool()) { fail(tr("This action is disabled in config.json.")); return; }
+    m_clipboardOnly = clipboardOnly;
+    // Read the focus before the key: a keyring that asks for its password takes the focus.
+    Focus focus;
+    if (!clipboardOnly) {
+        focus = m_desktop->focus();
+        if (focus.id.isEmpty()) { fail(tr("No focused window. Nothing was changed.")); return; }
+        if (Desktop::isTerminal(focus)) {
+            fail(tr("TextFix does not work in terminal windows. Copy the text, then run textfix clipboard.")); return;
+        }
+    }
     m_key.clear();
     if (!m_config.value("dryRun").toBool()) {
         const QString provider = m_config.value("provider").toString();
@@ -85,12 +137,13 @@ void Backend::start(int action, bool clipboardOnly) {
         m_key = Config::secret(provider, &error);
         if (m_key.isEmpty()) { fail(error.isEmpty() ? tr("Add your API key in Settings.") : error); return; }
     }
-    m_clipboardOnly = clipboardOnly;
     ++m_generation;
     m_busy = true;
     m_saved = {};
     m_clipboardToken.clear();
-    setStatus(tr("Reading text…"));
+    setStatus(tr("Fixing text… Press the shortcut again to cancel."));
+    // Shown before the text is read, so the user knows that the key was received.
+    announce(m_status, Progress);
     if (clipboardOnly) {
         bool ok;
         const QString text = m_desktop->text(&ok);
@@ -99,15 +152,13 @@ void Backend::start(int action, bool clipboardOnly) {
         captured(text);
         return;
     }
-    m_focus = m_desktop->focus();
-    if (m_focus.id.isEmpty()) { fail(tr("No focused window. Nothing was changed.")); return; }
-    m_terminal = Desktop::isTerminal(m_focus.app);
+    m_focus = focus;
     m_saved = m_desktop->snapshot();
     if (!m_saved.valid) { fail(tr("Could not preserve the clipboard. Copy some text first, then try again.")); return; }
     m_marker = "textfix-probe-" + QUuid::createUuid().toString();
     if (!m_desktop->setText(m_marker)) { fail(tr("Could not write to the clipboard.")); return; }
     m_clipboardToken = m_marker;
-    if (!m_desktop->shortcut(m_focus, "C", m_terminal)) { fail(tr("Could not copy from the focused window.")); return; }
+    if (!m_desktop->shortcut(m_focus, "C")) { fail(tr("Could not copy from the focused window.")); return; }
     // Many hosts complete the copy before the helper returns. Record it immediately so
     // cancellation before the first polling tick can still restore the borrowed clipboard.
     bool copied;
@@ -124,32 +175,38 @@ void Backend::probe(bool whole) {
     bool ok;
     const QString text = m_desktop->text(&ok);
     if (ok && text != m_marker) {
-        m_probe.stop();
         m_clipboardToken = text;
+        // After Select All, an app that was slow can still answer the first copy with only
+        // the selection. Wait one more tick and use what the clipboard has then, or the fixed
+        // selection would replace the whole field.
+        if (whole && !m_settled) { m_settled = true; return; }
+        m_probe.stop();
         captured(text);
         return;
     }
     const int wait = qBound(100, m_config.value(whole ? "copyTimeoutMs" : "selectionProbeMs").toInt(whole ? 900 : 400), 5000);
     if (m_copyWait.elapsed() < wait) return;
-    if (whole || m_terminal || !m_action.value("wholeTextWhenNoSelection").toBool(true)) {
+    if (whole || !m_action.value("wholeTextWhenNoSelection").toBool(true)) {
         fail(tr("No selected text. Select editable text and try again.")); return;
     }
-    if (!m_desktop->shortcut(m_focus, "A", false) || !m_desktop->shortcut(m_focus, "C", false)) {
+    if (!m_desktop->shortcut(m_focus, "A") || !m_desktop->shortcut(m_focus, "C")) {
         fail(tr("Could not select and copy this field.")); return;
     }
     m_whole = true;
+    m_settled = false;
     m_copyWait.restart();
 }
 
 void Backend::captured(const QString &text) {
-    if (text.trimmed().isEmpty() || text.size() > qBound(1, m_config.value("maxInputLength").toInt(10000), 100000)) {
-        fail(tr("The input was empty or too long. Nothing was sent.")); return;
+    const int limit = qBound(100, m_config.value("maxInputLength").toInt(10000), 100000);
+    if (text.trimmed().isEmpty()) { fail(tr("There is no text to fix.")); return; }
+    if (text.size() > limit) {
+        fail(tr("The text is longer than %1 characters. Nothing was sent. Select a smaller part.").arg(limit)); return;
     }
     m_input = text;
     m_prompt = m_action.value("prompt").toString();
     if (m_prompt.trimmed().isEmpty()) m_prompt = Config::fixPrompt();
-    setStatus(tr("Fixing text… Press the shortcut again to cancel."));
-    emit notice(m_status);
+    setStatus(tr("Waiting for the answer… Press the shortcut again to cancel."));
     if (m_config.value("dryRun").toBool()) {
         const quint64 generation = m_generation;
         QTimer::singleShot(0, this, [this, generation] { if (m_busy && m_generation == generation) completed(m_input.toUpper(), {}); });
@@ -158,8 +215,7 @@ void Backend::captured(const QString &text) {
     auto requestConfig = m_config;
     const QString overrideModel = m_action.value("model").toString().trimmed();
     if (!overrideModel.isEmpty()) requestConfig.insert("model", overrideModel);
-    const auto body = AiText::body(text, m_prompt, requestConfig);
-    if (body.value("model").toString().trimmed().isEmpty()) { fail(tr("Choose a model in Settings.")); return; }
+    if (AiText::resolveModel(requestConfig).isEmpty()) { fail(tr("Choose a model in Settings.")); return; }
     m_ai.start(text, m_prompt, requestConfig, m_key);
     m_key.clear();
 }
@@ -170,7 +226,7 @@ void Backend::completed(const QString &answer, const QString &error) {
     QString cleanError;
     const QString output = AiText::clean(answer, m_input, m_prompt, &cleanError);
     if (!cleanError.isEmpty()) { fail(cleanError); return; }
-    if (output == m_input) { fail(tr("No changes needed.")); return; }
+    if (output == m_input) { fail(tr("No changes needed. The text is already fine."), Info); return; }
     bool ok;
     const auto currentText = m_desktop->text(&ok);
     if (m_clipboardOnly && (!ok || currentText != m_clipboardToken)) {
@@ -188,11 +244,12 @@ void Backend::completed(const QString &answer, const QString &error) {
     }
     if (!m_desktop->setText(output)) { fail(tr("Could not write the result to the clipboard.")); return; }
     m_clipboardToken = output;
-    if (!m_clipboardOnly && !m_desktop->shortcut(m_focus, "V", m_terminal)) {
+    if (!m_clipboardOnly && !m_desktop->shortcut(m_focus, "V")) {
         m_saved = restoreTo;
         fail(tr("Could not paste into the original window. Nothing was replaced.")); return;
     }
     m_busy = false;
+    m_whole = false;
     m_input.clear();
     if (!m_clipboardOnly && m_config.value("restoreClipboard").toBool(true)) {
         m_pending = restoreTo;
@@ -200,7 +257,25 @@ void Backend::completed(const QString &answer, const QString &error) {
     }
     m_saved = {};
     setStatus(m_clipboardOnly ? tr("Fixed text is on the clipboard. Paste it when ready.") : tr("Text replaced. Undo in the original app to restore it."));
-    emit notice(m_status);
+    // In direct mode the changed text is the feedback, so the progress notification only closes.
+    announce(m_status, m_clipboardOnly ? Info : Done);
+    const QString model = m_action.value("model").toString().trimmed().isEmpty()
+        ? AiText::resolveModel(m_config) : m_action.value("model").toString().trimmed();
+    if (m_ai.fellBackFromZdr() && !m_config.value("dryRun").toBool() && !m_zdrWarned.contains(model)) {
+        m_zdrWarned.insert(model);
+        announce(tr("No zero-retention route for %1. TextFix used a provider that does not keep your text for training.").arg(model), Info);
+    }
+    if (!m_loadError.isEmpty() && !m_loadWarned) {
+        m_loadWarned = true;
+        announce(m_loadError, Error);
+    }
+}
+
+// Select All left the whole field selected and nothing was pasted over it. With the text still
+// selected, the next key that the user types would replace all of it.
+void Backend::collapseSelection() {
+    if (m_whole && !m_clipboardOnly) m_desktop->shortcut(m_focus, "Right");
+    m_whole = false;
 }
 
 void Backend::restoreCapture() {
@@ -215,7 +290,7 @@ void Backend::flushRestore() {
     if (!m_pending.valid) return;
     bool ok;
     if (m_desktop->text(&ok) == m_clipboardToken && ok && !m_desktop->write(m_pending))
-        emit notice(tr("The clipboard could not be restored."));
+        announce(tr("The clipboard could not be restored."), Error);
     m_pending = {};
 }
 
@@ -224,17 +299,25 @@ void Backend::cancel() {
     m_ai.cancel();
     m_probe.stop();
     m_key.clear();
-    if (m_busy) { restoreCapture(); m_busy = false; m_input.clear(); setStatus(tr("Cancelled")); }
+    if (m_busy) {
+        collapseSelection();
+        restoreCapture();
+        m_busy = false;
+        m_input.clear();
+        setStatus(tr("Cancelled"));
+        announce(m_status, Done);
+    }
     flushRestore();
 }
 
-void Backend::fail(const QString &message) {
+void Backend::fail(const QString &message, Notice kind) {
     m_probe.stop();
     m_ai.cancel();
+    if (m_busy) collapseSelection();
     restoreCapture();
     m_key.clear();
     m_input.clear();
     m_busy = false;
     setStatus(message);
-    emit notice(message);
+    announce(message, kind);
 }
