@@ -224,27 +224,32 @@ so in the notice rather than doing it quietly.
 
 ## Feedback while it works
 
-A small dark capsule appears just below your caret with a light sweeping through it, then fades out
-when the text lands. It brings its own contrast - soft drop shadow, hairline rim - so it stays
-legible on a white document, a black editor or a photo, and it sits below the caret rather than
-beside it so it never covers the text being fixed. It is click-through, never takes focus and never
-appears in the window switcher. Applications that do not publish a caret position get it next to the
-mouse pointer instead.
+A small glass capsule with three white dots comes up at the bottom centre of the screen, above the
+Dock or the taskbar. It is always in the same place, so you find it without a search, and it never
+covers the text that TextFix fixes. The screen is the one with your caret. The capsule is
+click-through, never takes the focus and never shows in the window switcher.
 
-It has two stages, because you are asking two different questions. The capsule appears the instant
-you press the hotkey, before anything is read - that one answers "did my key register?". The light
-starts sweeping once the request is actually out, which answers "is it stuck?". A capsule with
-nothing moving in it costs nothing to keep on screen: the animation only exists while there is a
+It has two stages, because you ask two different questions. The capsule comes up with still, dim
+dots when you press the hotkey, before TextFix reads anything. That answers "did my key register?".
+When the request is out, a liquid drop runs from dot to dot. It stretches as it moves and melts into
+each dot. That answers "is it stuck?". When the text lands, the dots melt back into one drop and
+the capsule shrinks away. A still capsule costs nothing: the animation runs only while there is a
 request to wait for.
+
+The three agents draw the same animation from the same numbers. macOS uses Liquid Glass on macOS 26
+and later, and the HUD material before. Windows and Linux draw a dark tinted glass with a soft
+shadow, so the capsule is legible on a white document, a black editor or a photo. On Linux the
+capsule is a Wayland layer surface (Hyprland, KDE Plasma, Sway) or an X11 window. GNOME on Wayland
+has no place for it, so TextFix shows a notification there.
 
 Pressing the hotkey again while a fix is in flight cancels it. The menu bar tooltip says so while
 it is working. When the model finds nothing to change, a short notice says so, and the field is
 left alone.
 
-If you have asked your system for less movement - Reduce Motion on macOS, or turning off "Animate
-controls and elements inside windows" on Windows - nothing travels and nothing scales. The capsule
-appears instead of fading in, and the sweep becomes a slow crossfade in place. No animation is ever
-on the path between the hotkey and your text coming back.
+If you asked your system for less movement - Reduce Motion on macOS, "Animate controls and elements
+inside windows" off on Windows, or Hyprland animations off - nothing moves and nothing scales. The
+capsule fades in and out, and the dots fade one after the other in place. No animation is ever on
+the path between the hotkey and your text coming back.
 
 Failures arrive as something you can act on: a refused key, an account out of credit, a model that
 does not exist. Windows uses a tray balloon; macOS draws its own HUD under the menu bar rather than
@@ -314,7 +319,7 @@ keys; its [guide](src/TextFixLinux/README.md) covers the supported desktop optio
 | `model` | `~openai/gpt-luna-latest` | A slug from the picker, or `custom` with `customModel` set. |
 | `zeroDataRetention` | `true` | Ask OpenRouter for a ZDR route, and never use a provider that trains on prompts. |
 | `allowReasoning` | `false` | Let the model reason first. Slower. |
-| `indicator` | `caret` | `caret`, `none`, plus `tray` on Windows / `menubar` on macOS. Linux: `notification` or `none`. |
+| `indicator` | `animation` | `animation` (the capsule at the bottom of the screen), `none`, plus `tray` on Windows / `menubar` on macOS / `notification` on Linux. The old value `caret` means `animation`. |
 | `notifyOnError` | `true` | Show failures on screen. |
 | `skipPasswordFields` | `true` | Refuse password controls. |
 | `maxInputLength` | `10000` | UTF-16 code units, counted the same way on both platforms. Anything longer is refused rather than truncated. So is an answer that is cut short, or more than twice as long as your text (and over 10000). |
@@ -487,7 +492,7 @@ src/TextFix/                 the Windows agent (C#, Win32, Native AOT)
   Ai/                        the provider client: retries, routing, output sanitising
   Configuration/             config.json and the DPAPI key store
   Editing/                   clipboard, synthesised keys, capture and replace
-  Ui/                        tray icon, caret pulse, settings window
+  Ui/                        tray icon, progress pill, settings window
   Interop/                   the Win32 surface this app uses
 
 src/TextFixMac/              the macOS agent (Swift, AppKit)
@@ -499,7 +504,7 @@ src/TextFixMac/              the macOS agent (Swift, AppKit)
     Ai/                      the same provider client, ported
     Core/                    hotkeys, orchestration, permissions, login item
     Editing/                 Accessibility read and write, pasteboard, synthesised keys
-    Ui/                      menu bar item, caret pulse, toast, settings window
+    Ui/                      menu bar item, progress pill, toast, settings window
   Tools/makeicon.swift       draws AppIcon.icns at build time
 
 src/TextFixLinux/            the Linux agent (C++, Qt Quick)
