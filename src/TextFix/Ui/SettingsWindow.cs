@@ -283,8 +283,8 @@ internal sealed unsafe class SettingsWindow
         Checkbox(fieldX, y, checkW, checkH, IdAutostart, "Start TextFix when I sign in");
         y += 30;
 
-        y = BuildActionBlock(y, 0, "Action 1");
-        y = BuildActionBlock(y, 1, "Action 2");
+        y = BuildActionBlock(y, 0, "Fix");
+        y = BuildActionBlock(y, 1, "Rewrite");
 
         // Two lines at this width. It used to be three, and the third was clipped by the label's
         // own height, which took the point of the sentence with it.
@@ -596,8 +596,10 @@ internal sealed unsafe class SettingsWindow
     /// shapes and a third could change tomorrow. All this has to catch is the accident - a field
     /// that was showing a saved key and now holds one or two characters.
     /// </summary>
+    // Printable ASCII only. A key copied from a PDF or a web page can carry a zero-width space or
+    // a typographic hyphen, and then each request fails with an error that does not name it.
     private static bool LooksLikeApiKey(string value) =>
-        value.Length >= 16 && value.AsSpan().IndexOfAny(" \t\r\n") < 0;
+        value.Length >= 16 && value.AsSpan().IndexOfAnyExceptInRange('\u0021', '\u007E') < 0;
 
     private void Complain(string message) =>
         Win32.MessageBox(_hwnd, message, "TextFix settings", Win32.MB_ICONWARNING);

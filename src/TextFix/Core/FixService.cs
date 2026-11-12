@@ -302,7 +302,7 @@ internal sealed class FixService
         // the request was out. That is what they are holding now, so that is what comes back
         // after the paste, not the older snapshot.
         ClipboardSnapshot? restoreTo = capture.Saved;
-        if (restoreTo != null && ClipboardBridge.SequenceNumber() != capture.ClipboardSequence)
+        if (restoreTo != null && UserCopiedSince(capture))
         {
             restoreTo = ClipboardBridge.Snapshot(_hwnd) ?? restoreTo;
         }
@@ -386,13 +386,34 @@ internal sealed class FixService
     /// </summary>
     private void RestoreAfterCapture(TextCapture? capture)
     {
+        // Ctrl+A left the whole field selected and nothing was pasted over it. With the text
+        // still selected, the next key the user types would replace all of it.
+        if (capture is { Mode: CaptureMode.WholeText } && TextTarget.StillFocused(capture))
+        {
+            Keystrokes.CollapseSelection();
+        }
         if (capture?.Saved == null) return;
-        if (ClipboardBridge.SequenceNumber() != capture.ClipboardSequence)
+        if (UserCopiedSince(capture))
         {
             Log.Debug("The clipboard changed during the request; left as it is");
             return;
         }
         ClipboardBridge.RestoreOrClear(capture.Saved, _hwnd);
+    }
+
+    /// <summary>
+    /// True when the clipboard holds something new that is not the text of the capture.
+    ///
+    /// The sequence number alone does not tell. It also moves when a clipboard manager makes the
+    /// host render a format it promised, and when the host answers a copy late, and then the
+    /// clipboard still holds the captured text. To read that as a copy by the user would drop the
+    /// snapshot and leave the user with the text of the field as their clipboard.
+    /// </summary>
+    private bool UserCopiedSince(TextCapture capture)
+    {
+        if (ClipboardBridge.SequenceNumber() == capture.ClipboardSequence) return false;
+        string? now = ClipboardBridge.GetText(_hwnd, capture.Text.Length + 1);
+        return !string.Equals(now, capture.Text, StringComparison.Ordinal);
     }
 
     private void ShowIndicator(AppConfig config, RECT caret, nint foreground, bool sweeping)

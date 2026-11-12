@@ -35,7 +35,9 @@ internal static class AiStatus
     /// </summary>
     internal const int AnswerCutShort = -3;
 
-    private static readonly int[] Retryable = [408, 425, 429, 500, 502, 503, 504, UnusableResponse];
+    // 520 to 524 are errors of the Cloudflare edge in front of the provider. They clear in a moment.
+    private static readonly int[] Retryable =
+        [408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, UnusableResponse];
 
     internal static bool IsRetryable(int statusCode) => Array.IndexOf(Retryable, statusCode) >= 0;
 }
@@ -203,6 +205,12 @@ internal static class AiErrors
         if (e is AiException ai)
         {
             if (ai.StatusCode is 429 or 503) return "Provider is rate limiting. Try again in a moment.";
+            // OpenRouter answers a slug that it does not know with 400, not with 404.
+            if (ai.StatusCode == 400
+                && ai.ErrorBody.Contains("not a valid model", StringComparison.OrdinalIgnoreCase))
+            {
+                return Actionable(404) ?? fallback;
+            }
             string? actionable = Actionable(ai.StatusCode);
             if (actionable != null) return actionable;
             string raw = ai.Message;

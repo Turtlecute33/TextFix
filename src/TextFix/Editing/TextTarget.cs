@@ -159,6 +159,7 @@ internal static unsafe class TextTarget
         }
 
         Keystrokes.ClearSendBlocked();
+        Keystrokes.WaitForKeysUp(Keystrokes.HotkeyReleaseWaitMs);
 
         // Park a marker on the clipboard so the copy below is detectable even on a desktop with
         // other clipboard writers running.
@@ -185,6 +186,14 @@ internal static unsafe class TextTarget
 
         if (string.IsNullOrWhiteSpace(text))
         {
+            if (ClipboardBridge.HoldsCopyWithoutText(baseline))
+            {
+                // The copy happened, but it has no text: a picture in a document, a file in
+                // Explorer. That is a selection, so Select All must not follow - it would end
+                // with the whole document replaced by plain text.
+                error = Cleanup("The selection has no text.");
+                return false;
+            }
             if (!options.AllowSelectAll)
             {
                 error = Cleanup("Nothing is selected.");
@@ -204,8 +213,23 @@ internal static unsafe class TextTarget
                 if (!ClipboardBridge.SetText(probeMarker, owner, transient: true)) return null;
                 uint mark = ClipboardBridge.SequenceNumber();
                 if (!Keystrokes.SendCtrlChord(VK.KEY_C, chordDelayMs)) return null;
-                return ClipboardBridge.WaitForCopy(
+                string? copied = ClipboardBridge.WaitForCopy(
                     probeMarker, mark, options.CopyTimeoutMs, owner, options.MaxChars);
+                if (copied == null) return null;
+                // A host that was slow can answer the first copy only now, with the selection and
+                // not the field. The field is fully selected at this point, so that text would
+                // replace all of it. Wait a moment and use the answer that comes last.
+                uint seen = ClipboardBridge.SequenceNumber();
+                Thread.Sleep(50);
+                if (ClipboardBridge.SequenceNumber() != seen)
+                {
+                    string? later = ClipboardBridge.GetText(owner, options.MaxChars);
+                    if (!string.IsNullOrEmpty(later) && !string.Equals(later, probeMarker, StringComparison.Ordinal))
+                    {
+                        return later;
+                    }
+                }
+                return copied;
             }
 
             text = ReadWholeField(Keystrokes.ChordSettleMs, null);
@@ -243,6 +267,14 @@ internal static unsafe class TextTarget
             ClipboardSequence = ClipboardBridge.SequenceNumber(),
         };
         return true;
+    }
+
+    /// <summary>True when the window and the control of the capture still have the focus.</summary>
+    internal static bool StillFocused(TextCapture capture)
+    {
+        nint foreground = Win32.GetForegroundWindow();
+        return foreground == capture.Foreground
+            && (capture.Focus == 0 || GetFocusWindow(foreground) == capture.Focus);
     }
 
     internal static ReplaceOutcome Replace(nint owner, TextCapture capture, string replacement, bool requireSameFocus)

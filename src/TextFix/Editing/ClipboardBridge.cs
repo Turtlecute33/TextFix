@@ -34,10 +34,11 @@ internal static unsafe class ClipboardBridge
     private const int OpenAttempts = 12;
     private const int OpenRetryDelayMs = 10;
 
-    // Total ceiling on what we are willing to copy out and back in. A 40 MB screenshot on the
-    // clipboard is not worth two 40 MB copies on every fix; above the cap the format is skipped
-    // and the user is told the clipboard could not be fully restored.
-    private const int MaxSnapshotBytes = 4 * 1024 * 1024;
+    // Total ceiling on what we are willing to copy out and back in. A screenshot is the usual
+    // large item, and one of a 4K screen is 33 MB as a bitmap, so the cap must be above that or
+    // the picture the user holds does not come back. Above the cap the format is skipped and the
+    // user is told the clipboard could not be fully restored.
+    private const int MaxSnapshotBytes = 64 * 1024 * 1024;
 
     private static uint _formatHtml;
     private static uint _formatRtf;
@@ -339,6 +340,19 @@ internal static unsafe class ClipboardBridge
     /// A value nothing else will ever put on the clipboard. Written before a probing Ctrl+C so
     /// that "did the copy happen" becomes "is the marker still there", which is decidable.
     /// </summary>
+    /// <summary>
+    /// True when a copy replaced the probe marker with content that has no text, such as a
+    /// picture or a list of files. None of these calls opens the clipboard.
+    /// </summary>
+    internal static bool HoldsCopyWithoutText(uint baseline) =>
+        Win32.GetClipboardSequenceNumber() != baseline
+        && !Win32.IsClipboardFormatAvailable(Win32.CF_UNICODETEXT)
+        && (Win32.IsClipboardFormatAvailable(Win32.CF_DIB)
+            || Win32.IsClipboardFormatAvailable(Win32.CF_BITMAP)
+            || Win32.IsClipboardFormatAvailable(Win32.CF_ENHMETAFILE)
+            || Win32.IsClipboardFormatAvailable(Win32.CF_METAFILEPICT)
+            || Win32.IsClipboardFormatAvailable(Win32.CF_HDROP));
+
     internal static string NewProbeMarker() => "TextFixprobe" + Guid.NewGuid().ToString("N");
 
     /// <summary>
@@ -366,12 +380,15 @@ internal static unsafe class ClipboardBridge
             uint current = Win32.GetClipboardSequenceNumber();
             if (current != lastSeen)
             {
-                lastSeen = current;
                 string? text = GetText(owner, readLimit);
-                if (text != null && text.Length > 0 && !string.Equals(text, marker, StringComparison.Ordinal))
+                if (text != null && text.Length > 0)
                 {
-                    return text;
+                    if (!string.Equals(text, marker, StringComparison.Ordinal)) return text;
+                    lastSeen = current;
                 }
+                // No text: the host emptied the clipboard and has not written yet, or the
+                // clipboard was busy. The number does not always move again when the text
+                // arrives, so lastSeen stays and the next pass reads again.
             }
             if (Environment.TickCount64 >= deadline) return null;
             Thread.Sleep(4);

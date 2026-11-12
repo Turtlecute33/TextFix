@@ -94,19 +94,21 @@ internal static class ModelCatalog
 
     internal static readonly ModelEntry[] OpenRouterTextFix =
     [
+        new("~openai/gpt-luna-latest", "GPT Luna", PricingTier.Cheap, Zdr: true, Cache: true),
         new("~openai/gpt-mini-latest", "GPT Mini", PricingTier.Medium, Zdr: true, Cache: true),
-        new("~anthropic/claude-haiku-latest", "Claude Haiku", PricingTier.Medium, Zdr: true, Cache: true),
+        new("~anthropic/claude-haiku-latest", "Claude Haiku", PricingTier.Cheap, Zdr: true, Cache: true),
         new("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", PricingTier.Cheap, Zdr: true, Cache: true),
         new("x-ai/grok-4.3", "Grok 4.3", PricingTier.Medium, Zdr: true, Cache: true),
-        new("~google/gemini-flash-latest", "Gemini Flash", PricingTier.Cheap, Zdr: true, Cache: true),
+        new("~google/gemini-flash-latest", "Gemini Flash", PricingTier.Medium, Zdr: true, Cache: true),
     ];
 
     internal static readonly ModelEntry[] PayPerQTextFix =
     [
+        new("~openai/gpt-luna-latest", "GPT Luna", PricingTier.Cheap),
         new("~openai/gpt-mini-latest", "GPT Mini", PricingTier.Medium),
         new("x-ai/grok-4.3", "Grok 4.3", PricingTier.Medium),
-        new("~anthropic/claude-haiku-latest", "Claude Haiku", PricingTier.Medium),
-        new("~google/gemini-flash-latest", "Gemini Flash", PricingTier.Cheap),
+        new("~anthropic/claude-haiku-latest", "Claude Haiku", PricingTier.Cheap),
+        new("~google/gemini-flash-latest", "Gemini Flash", PricingTier.Medium),
         new("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", PricingTier.Cheap, Zdr: true, Cache: true),
     ];
 

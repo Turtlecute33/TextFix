@@ -270,6 +270,7 @@ internal static class VK
     public const ushort MENU = 0x12;
     public const ushort ESCAPE = 0x1B;
     public const ushort SPACE = 0x20;
+    public const ushort RIGHT = 0x27;
     public const ushort LSHIFT = 0xA0;
     public const ushort RSHIFT = 0xA1;
     public const ushort LCONTROL = 0xA2;

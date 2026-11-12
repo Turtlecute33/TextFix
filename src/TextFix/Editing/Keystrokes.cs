@@ -36,6 +36,62 @@ internal static unsafe class Keystrokes
 
     internal const int SlowKeyEventDelayMs = 12;
 
+    /// <summary>
+    /// The longest time to wait for the user to let go of the hotkey before the first chord.
+    /// </summary>
+    internal const int HotkeyReleaseWaitMs = 600;
+
+    /// <summary>
+    /// Waits until no keyboard key is down, for at most <paramref name="timeoutMs"/>.
+    ///
+    /// The hotkey is still down when the handler runs. <see cref="ReleaseHeldModifiers"/> can
+    /// only tell Windows that the modifiers are up, and that has two bad results while the keys
+    /// are held: the letter of the hotkey repeats and, with its modifiers gone, is typed into the
+    /// field; and a modifier that the user lifts in the middle of a chord takes the Ctrl of the
+    /// chord with it, so a plain "c" replaces the selection. To wait for the fingers is the only
+    /// sure cure. A key that is tapped, such as F13 from a VIA board, is up already and costs
+    /// nothing. After the limit the old method is used as it was.
+    /// </summary>
+    internal static void WaitForKeysUp(int timeoutMs)
+    {
+        long deadline = Environment.TickCount64 + timeoutMs;
+        while (AnyKeyDown())
+        {
+            if (Environment.TickCount64 >= deadline)
+            {
+                Log.Debug("A key was still down after " + timeoutMs + " ms; sending the chord anyway");
+                return;
+            }
+            Thread.Sleep(5);
+        }
+    }
+
+    private static bool AnyKeyDown()
+    {
+        // 0x08 is the first keyboard key. The codes below it are the mouse buttons.
+        for (int vk = 0x08; vk <= 0xFE; vk++)
+        {
+            if ((Win32.GetAsyncKeyState(vk) & 0x8000) != 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Sends the Right arrow, which puts the caret at the end of a selection and selects
+    /// nothing. Used when Ctrl+A selected a whole field and nothing was pasted over it: with all
+    /// the text still selected, the next key the user types would replace it.
+    /// </summary>
+    internal static void CollapseSelection()
+    {
+        // A cancel comes from the hotkey, so its keys can be down at this moment.
+        WaitForKeysUp(HotkeyReleaseWaitMs);
+        if (ReleaseHeldModifiers()) Thread.Sleep(ModifierSettleMs);
+        Span<INPUT> tap = [KeyEvent(VK.RIGHT, up: false), KeyEvent(VK.RIGHT, up: true)];
+        bool blocked = LastSendBlocked;
+        Send(tap);
+        LastSendBlocked = blocked;
+    }
+
     private static readonly int[] ModifierKeys =
     [
         VK.LCONTROL, VK.RCONTROL, VK.LMENU, VK.RMENU, VK.LSHIFT, VK.RSHIFT, VK.LWIN, VK.RWIN,
@@ -149,7 +205,10 @@ internal static unsafe class Keystrokes
         };
     }
 
-    private static bool IsExtended(ushort vk) => vk is VK.RCONTROL or VK.RMENU or VK.LWIN or VK.RWIN;
+    // The arrow keys are extended keys. Without the flag, a host that reads the scan code sees
+    // the numeric keypad.
+    private static bool IsExtended(ushort vk) =>
+        vk is VK.RCONTROL or VK.RMENU or VK.LWIN or VK.RWIN or VK.RIGHT;
 
     private static bool Send(Span<INPUT> inputs)
     {
