@@ -185,6 +185,17 @@ desktop, clipboard history and cloud sync included. So TextFix parks a unique ma
 clipboard, presses Ctrl+C, and looks: the marker still being there means nothing was selected,
 anything else is what the application copied. Only in the first case does it press Ctrl+A.
 
+**TextFix waits for your fingers.** The hotkey is still down when Windows reports it, and a
+synthesised Ctrl+C on top of held keys is not reliable. TextFix waits until you let go, for 0.6 s
+at most, before it copies. A key that you tap, such as F13, adds no wait.
+
+**A selection with no text is refused.** If the copy gives a picture or a file and no text,
+TextFix stops there. It does not press Ctrl+A, which would replace the whole document.
+
+**The field is not left selected.** When Ctrl+A selected the whole field and nothing is pasted
+(an error, a cancel, no change), TextFix presses the Right arrow, so the next key that you type
+does not replace all the text.
+
 **Your clipboard comes back.** Whatever you were holding - text, files, an image, rich text - is
 copied out before the probe and restored about 180 ms after the paste. It comes back with the
 flags it had: a password copied from a password manager stays out of clipboard history when it is
@@ -249,8 +260,7 @@ work". Both can be switched off if you want the agent completely silent.
   offers it, the request is sent once more, but only to providers that do not keep prompts for
   training (`data_collection: deny`), and TextFix tells you once per model. If no provider meets
   even that, the fix fails and says so; it never falls further. Turn off zero data retention to
-  let your OpenRouter account settings decide instead. Linux currently requires a compatible
-  ZDR route when enabled and fails without downgrading this policy.
+  let your OpenRouter account settings decide instead.
 - **Reasoning off by default** on OpenRouter. Copy-editing does not benefit from a scratchpad, and
   it costs seconds. PayPerQ offers no switch for it.
 - **Password fields are refused when the field reports itself as one.** On macOS that is
@@ -279,8 +289,8 @@ work". Both can be switched off if you want the agent completely silent.
   text field, and Ctrl+C in a Windows console stops the running program instead of copying. TextFix
   does not detect a terminal inside an editor, an IDE, a browser or a remote-desktop window. There
   it can send the selected text, or the whole scrollback when nothing is selected, and then paste
-  the answer onto the command line. Do not use TextFix in those terminals. Linux allows selected
-  text in recognized terminal windows using Ctrl+Shift+C/V, and refuses whole-field capture there.
+  the answer onto the command line. Do not use TextFix in those terminals. On Linux, copy the
+  terminal text and run `textfix clipboard`.
 
 <br>
 
@@ -301,10 +311,10 @@ keys; its [guide](src/TextFixLinux/README.md) covers the supported desktop optio
 | Key | Default | What it does |
 | --- | --- | --- |
 | `provider` | `openrouter` | `openrouter` or `payperq`. |
-| `model` | `~openai/gpt-mini-latest` | A slug from the picker, or `custom` with `customModel` set. |
+| `model` | `~openai/gpt-luna-latest` | A slug from the picker, or `custom` with `customModel` set. |
 | `zeroDataRetention` | `true` | Ask OpenRouter for a ZDR route, and never use a provider that trains on prompts. |
 | `allowReasoning` | `false` | Let the model reason first. Slower. |
-| `indicator` | `caret` | `caret`, `none`, plus `tray` on Windows / `menubar` on macOS. |
+| `indicator` | `caret` | `caret`, `none`, plus `tray` on Windows / `menubar` on macOS. Linux: `notification` or `none`. |
 | `notifyOnError` | `true` | Show failures on screen. |
 | `skipPasswordFields` | `true` | Refuse password controls. |
 | `maxInputLength` | `10000` | UTF-16 code units, counted the same way on both platforms. Anything longer is refused rather than truncated. So is an answer that is cut short, or more than twice as long as your text (and over 10000). |
@@ -383,8 +393,9 @@ Rewrite is the action most often run on text somebody else wrote.
 
 ## Troubleshooting
 
-**Nothing happens when I press the hotkey.** Set `"dryRun": true` in `config.json`, restart the agent
-from its menu, and press the hotkey in a text box. Dry run does the entire pipeline - capture,
+**Nothing happens when I press the hotkey.** Set `"dryRun": true` in `config.json`, quit the agent
+from its menu and start it again (Linux reads the file on each fix, so no restart is necessary),
+and press the hotkey in a text box. Dry run does the entire pipeline - capture,
 clipboard, replace, restore - but replaces the model call with UPPER CASE, so it sends nothing and
 costs nothing. If your text comes back uppercased the plumbing works and the problem is the request;
 if it does not, the log will name the step that stopped.
@@ -453,13 +464,13 @@ CI builds all platforms on every push and pull request, including Linux x64/ARM6
 Omarchy Arch package. A release is a tag:
 
 ```bash
-git tag v1.1.0 && git push origin v1.1.0
+git tag v1.5.0 && git push origin v1.5.0
 ```
 
 Once the release is published, point the Homebrew cask at it:
 
 ```zsh
-./update-tap.zsh 1.1.0
+./update-tap.zsh 1.5.0
 ```
 
 Every release zip carries a build provenance attestation. To check one, see

@@ -54,6 +54,19 @@ jobs:
         run: Get-Item dist\${{ matrix.rid }}\TextFix.exe | Select-Object Name, Length
         shell: pwsh
 
+      # The build proves that the code compiles. This proves that the native binary starts,
+      # loads its imports and keeps its message loop alive.
+      - name: Start the agent and check that it stays up
+        shell: pwsh
+        run: |
+          $agent = Start-Process "dist\${{ matrix.rid }}\TextFix.exe" -PassThru
+          Start-Sleep -Seconds 5
+          $log = Join-Path $env:LOCALAPPDATA "TextFix\textfix.log"
+          if (Test-Path $log) { Get-Content $log }
+          if ($agent.HasExited) { throw "TextFix stopped with exit code $($agent.ExitCode)" }
+          Stop-Process -Id $agent.Id -Force
+          if ((Test-Path $log) -and (Select-String -Path $log -Pattern "Fatal" -Quiet)) { throw "The log has a fatal error" }
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: TextFix-${{ matrix.rid }}
@@ -99,6 +112,15 @@ jobs:
           ./build-linux.sh --omarchy --zip --version "$version"
           ./dist/linux-${{ matrix.arch }}/textfix --version
           desktop-file-validate packaging/linux/textfix.desktop
+          # The release binary must be a PIE with full RELRO (see textfix.pro).
+          readelf -h dist/linux-${{ matrix.arch }}/textfix | grep -q 'Type:.*DYN'
+          readelf -d dist/linux-${{ matrix.arch }}/textfix | grep -q 'BIND_NOW'
+          # install.sh must put each file in place, and --uninstall must remove each of them.
+          ./dist/omarchy-${{ matrix.arch }}/install.sh --prefix /usr --destdir "$PWD/stage"
+          test -x stage/usr/bin/textfix
+          test -f stage/usr/share/textfix/omarchy/textfix.lua
+          ./dist/omarchy-${{ matrix.arch }}/install.sh --prefix /usr --destdir "$PWD/stage" --uninstall
+          test -z "$(find stage -type f)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: TextFix-linux-${{ matrix.arch }}
