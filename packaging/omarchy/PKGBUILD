@@ -2,7 +2,7 @@
 # Build from a repository checkout: cd packaging/omarchy && makepkg
 # The local checkout is intentional: this also builds untagged changes for testing.
 pkgname=textfix-omarchy
-pkgver=1.5.0
+pkgver=1.6.0
 pkgrel=1
 pkgdesc='Fix text in place with AI, integrated with Omarchy and Hyprland'
 arch=('x86_64' 'aarch64')
