@@ -123,11 +123,11 @@ internal sealed class FixService
         // Feedback *before* the capture rather than after it. The whole-field path spends the
         // better part of a second in clipboard round trips, and a hotkey that changes nothing on
         // screen for that long reads as a dead key. The indicator starts in its quiet form -
-        // present, not sweeping - and is promoted once the request is actually in flight, so the
+        // still, dim dots - and is promoted once the request is actually in flight, so the
         // two questions the user has at those two moments ("did my key register?" and "is it
         // stuck?") each get their own answer.
         nint foreground = Win32.GetForegroundWindow();
-        ShowIndicator(config, TextTarget.GetCaretRect(foreground), foreground, sweeping: false);
+        ShowIndicator(config, TextTarget.GetCaretRect(foreground), foreground, working: false);
 
         var options = new CaptureOptions(
             AllowSelectAll: action.WholeTextWhenNoSelection,
@@ -165,9 +165,9 @@ internal sealed class FixService
         _state = State.Working;
         long token = ++_token;
 
-        // Now that the real caret rectangle is known, settle the indicator onto it and promote it
-        // to the sweeping form. Repositioning does not restart the entrance animation.
-        ShowIndicator(config, capture.CaretRect, capture.Foreground, sweeping: true);
+        // The request goes out now, so promote the indicator to its moving form. It stays where
+        // it is and does not come in again.
+        ShowIndicator(config, capture.CaretRect, capture.Foreground, working: true);
 
         if (config.DryRun)
         {
@@ -416,18 +416,18 @@ internal sealed class FixService
         return !string.Equals(now, capture.Text, StringComparison.Ordinal);
     }
 
-    private void ShowIndicator(AppConfig config, RECT caret, nint foreground, bool sweeping)
+    private void ShowIndicator(AppConfig config, RECT caret, nint foreground, bool working)
     {
-        if (config.Indicator == "caret") CaretPulse.Show(caret, foreground, sweeping);
+        if (config.Indicator == "animation") ProgressPill.Show(caret, foreground, working);
         _indicatorShown = true;
-        _tray.SetTooltip(sweeping ? WorkingTooltip : ReadingTooltip);
+        _tray.SetTooltip(working ? WorkingTooltip : ReadingTooltip);
     }
 
     private void HideIndicator()
     {
         if (!_indicatorShown) return;
         _indicatorShown = false;
-        CaretPulse.Hide();
+        ProgressPill.Hide();
         _tray.SetTooltip(AgentWindow.IdleTooltip);
     }
 

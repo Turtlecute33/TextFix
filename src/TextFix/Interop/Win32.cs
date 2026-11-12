@@ -115,6 +115,9 @@ internal static unsafe partial class Win32
     [LibraryImport(User32, EntryPoint = "MonitorFromPoint")]
     internal static partial nint MonitorFromPoint(POINT pt, uint dwFlags);
 
+    [LibraryImport(User32, EntryPoint = "MonitorFromWindow")]
+    internal static partial nint MonitorFromWindow(nint hwnd, uint dwFlags);
+
     [LibraryImport(User32, EntryPoint = "GetMonitorInfoW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetMonitorInfo(nint hMonitor, ref MONITORINFO lpmi);

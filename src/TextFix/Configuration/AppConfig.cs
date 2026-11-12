@@ -211,8 +211,8 @@ internal sealed class AppConfig
     /// </summary>
     public int KeyEventDelayMs { get; set; } = 12;
 
-    /// <summary>"caret", "tray" or "none".</summary>
-    public string Indicator { get; set; } = "caret";
+    /// <summary>"animation", "tray" or "none".</summary>
+    public string Indicator { get; set; } = "animation";
 
     public bool NotifyOnError { get; set; } = true;
 
@@ -325,9 +325,10 @@ internal sealed class AppConfig
         CustomModel ??= string.Empty;
         if (string.IsNullOrWhiteSpace(Provider)) Provider = Defaults.Provider;
         if (string.IsNullOrWhiteSpace(Model)) Model = Defaults.Model;
-        if (string.IsNullOrWhiteSpace(Indicator)) Indicator = "caret";
+        if (string.IsNullOrWhiteSpace(Indicator)) Indicator = "animation";
         Indicator = Indicator.Trim().ToLowerInvariant();
-        if (Indicator is not ("caret" or "tray" or "none")) Indicator = "caret";
+        // "caret" is the name from before 1.6, when the indicator was below the caret.
+        if (Indicator is not ("animation" or "tray" or "none")) Indicator = "animation";
         MaxInputLength = Math.Clamp(MaxInputLength, 100, 100_000);
         RequestBudgetMs = Math.Clamp(RequestBudgetMs, 5_000, 300_000);
         ClipboardRestoreDelayMs = Math.Clamp(ClipboardRestoreDelayMs, 0, 5_000);

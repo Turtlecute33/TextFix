@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using TextFix.Core;
 using TextFix.Interop;
@@ -7,67 +7,45 @@ using TextFix.Interop;
 namespace TextFix.Ui;
 
 /// <summary>
-/// The indicator shown next to the caret while a fix is in flight: a small dark capsule with a
-/// light sweeping through it. Every AI action has a network wait in the middle of it, and one
+/// The indicator shown while a fix is in flight: a small glass capsule at the bottom centre of the
+/// work area, with three white dots and a liquid drop that runs between them (see
+/// <see cref="PillScene"/>). Every AI action has a network wait in the middle of it, and one
 /// moving thing is the difference between "it is working" and "it is stuck".
 ///
-/// It has two stages, because the user asks two different questions at two different moments. The
-/// quiet stage - a plain capsule, no sweep - goes up the instant the hotkey is pressed and answers
-/// "did my key register?", which matters because the capture that follows can spend the better part
-/// of a second in clipboard round trips. The sweeping stage answers "is it stuck?" once the request
-/// is actually out. A static capsule costs nothing to keep on screen: the frame timer stops until
-/// something promotes or hides it.
+/// It is always in the same place, so the eye finds it without a search, and it never covers the
+/// text being fixed. The monitor is the one with the caret, or with the foreground window when the
+/// app publishes no caret (Chromium and Electron).
 ///
-/// It is drawn rather than composed of controls because it has to be legible on an unknown
-/// background - a white document, a black editor, a photo - so it brings its own contrast: a dark
-/// capsule with a soft drop shadow and a hairline rim, and a bright indeterminate sweep inside it.
-/// It fades and scales in and out instead of blinking into existence.
+/// It has two stages. The capsule comes up with still, dim dots the instant the hotkey is pressed,
+/// and answers "did my key register?", which matters because the capture that follows can spend
+/// the better part of a second in clipboard round trips. The drop starts to move once the request
+/// is out, and answers "is it stuck?". A still capsule costs nothing to keep on screen: the frame
+/// timer stops until something promotes or hides it.
 ///
 /// Under reduced motion (Ease of Access &gt; "Animate controls and elements inside windows" off)
-/// nothing travels and nothing scales: the capsule appears at full opacity and the sweep is
-/// replaced by a slow crossfade in place, which still reads as "alive" without putting a moving
-/// light on the screen of somebody who asked not to have one.
+/// nothing moves or scales: the capsule fades in and out, and the dots fade one after the other in
+/// place.
 ///
 /// The window is layered, click-through, non-activating and marked as a tool window, so it cannot
 /// take focus, appear in Alt+Tab, or intercept a click. It lives on its own thread with its own
 /// message loop, so the animation stays smooth while the main thread is blocked in a clipboard
-/// round trip, and the whole thing costs one timer over a surface of a few thousand pixels while
-/// sweeping and nothing at all otherwise.
+/// round trip.
 /// </summary>
-internal static unsafe class CaretPulse
+internal static unsafe class ProgressPill
 {
-    private const string ClassName = "TextFixPulse";
+    private const string ClassName = "TextFixPill";
     private const nuint TimerId = 1;
 
-    // 60 fps. The surface is tiny, so this is cheaper than it sounds and is what makes the sweep
-    // read as smooth rather than as a stutter.
+    // About 60 fps. The surface is small, so this is cheaper than it sounds.
     private const int FrameIntervalMs = 16;
 
     // 10 fps is plenty for a 1.5 s crossfade, and it is the difference between a reduced-motion
     // indicator that costs nothing and one that costs the same as the animated one.
     private const int ReducedFrameIntervalMs = 100;
 
-    private const int SweepPeriodMs = 1150;
-    private const int ReducedSweepPeriodMs = 1500;
-    private const int FadeInMs = 150;
-    private const int FadeOutMs = 130;
-
-    // Logical (96 dpi) geometry. The margin is headroom for the drop shadow, which has to live
-    // inside the window because a layered window cannot draw outside its own bounds.
-    private const int PillWidth = 52;
-    private const int PillHeight = 15;
-    private const int Margin = 6;
-
-    private const int SurfaceWidth = PillWidth + Margin * 2;
-    private const int SurfaceHeight = PillHeight + Margin * 2;
-
-    private enum Phase
-    {
-        In,
-        Loop,
-        Out,
-        Hidden,
-    }
+    // Logical (96 dpi) size of the surface: the capsule and the margin around it.
+    private const int SurfaceWidth = (int)(PillScene.Width + PillScene.Margin * 2);
+    private const int SurfaceHeight = (int)(PillScene.Height + PillScene.Margin * 2);
 
     private static volatile nint _hwnd;
     private static nint _memoryDc;
@@ -75,68 +53,71 @@ internal static unsafe class CaretPulse
     private static uint* _pixels;
     private static int _width;
     private static int _height;
-    private static uint _dpi = 96;
-    private static long _shownAtTicks;
-    private static long _fadeOutAtTicks;
-    private static Phase _phase = Phase.Hidden;
     private static Thread? _thread;
     private static readonly ManualResetEventSlim Ready = new(false);
     private static readonly object Gate = new();
+    private static bool _classRegistered;
+
+    // Written by the agent thread under Gate, read by the indicator thread.
     private static int _requestedX;
     private static int _requestedY;
-    private static bool _classRegistered;
-    private static volatile bool _sweeping;
-    private static volatile bool _reducedMotion;
+    private static uint _requestedDpi = 96;
+    private static bool _requestedWorking;
+    private static bool _requestedReduced;
+
+    // Owned by the indicator thread.
+    private static uint _dpi = 96;
+    private static bool _visible;
+    private static PillScene.Timeline _timeline;
+    private static readonly PillScene.Frame Frame = new();
 
     /// <summary>
-    /// Positions the indicator for the given caret rectangle and starts it, or promotes one that is
-    /// already up. Called from the agent thread; all the window work happens on the indicator
-    /// thread.
+    /// Starts the indicator, or promotes one that is already up. Called from the agent thread; all
+    /// the window work happens on the indicator thread.
     /// </summary>
-    /// <param name="sweeping">
+    /// <param name="working">
     /// False for the quiet stage shown during the capture, true once the request is in flight.
     /// </param>
-    internal static void Show(RECT caret, nint foreground, bool sweeping)
+    internal static void Show(RECT caret, nint foreground, bool working)
     {
         try
         {
             EnsureThread();
             if (_hwnd == 0) return;
 
-            uint dpi = NativeUi.DpiFor(foreground != 0 ? foreground : _hwnd);
-            int width = NativeUi.Scale(SurfaceWidth, dpi);
-            int height = NativeUi.Scale(SurfaceHeight, dpi);
-
-            int x;
-            int y;
+            nint monitor = 0;
             if (!caret.IsEmpty)
             {
-                // Just below the caret rather than beside it, so it never sits on top of the text
-                // being fixed. Nudged left by the shadow margin so the capsule lines up with the
-                // caret rather than the invisible surface around it.
-                x = caret.Left - NativeUi.Scale(Margin, dpi) + NativeUi.Scale(2, dpi);
-                y = caret.Bottom + NativeUi.Scale(4, dpi) - NativeUi.Scale(Margin, dpi);
+                var centre = new POINT { X = (caret.Left + caret.Right) / 2, Y = (caret.Top + caret.Bottom) / 2 };
+                monitor = Win32.MonitorFromPoint(centre, Win32.MONITOR_DEFAULTTONEAREST);
+            }
+            else if (foreground != 0)
+            {
+                monitor = Win32.MonitorFromWindow(foreground, Win32.MONITOR_DEFAULTTONEAREST);
             }
             else if (Win32.GetCursorPos(out POINT cursor))
             {
-                // Chromium and Electron apps publish no caret. The pointer is the next best guess
-                // at where the user is looking, offset so the capsule never sits under the cursor.
-                x = cursor.X + NativeUi.Scale(12, dpi);
-                y = cursor.Y + NativeUi.Scale(20, dpi);
+                monitor = Win32.MonitorFromPoint(cursor, Win32.MONITOR_DEFAULTTONEAREST);
             }
-            else
-            {
-                return;
-            }
-            NativeUi.ClampToScreen(ref x, ref y, width, height);
+            var info = new MONITORINFO { cbSize = (uint)sizeof(MONITORINFO) };
+            if (monitor == 0 || !Win32.GetMonitorInfo(monitor, ref info)) return;
 
-            _sweeping = sweeping;
-            _reducedMotion = !NativeUi.AnimationsEnabled();
+            // The foreground window is on that monitor in all but odd cases, so its DPI is the
+            // monitor's DPI.
+            uint dpi = NativeUi.DpiFor(foreground != 0 ? foreground : _hwnd);
+            int width = NativeUi.Scale(SurfaceWidth, dpi);
+            int height = NativeUi.Scale(SurfaceHeight, dpi);
+            RECT work = info.rcWork;
+            int x = (work.Left + work.Right - width) / 2;
+            int y = work.Bottom - NativeUi.Scale((int)(PillScene.BottomGap - PillScene.Margin), dpi) - height;
+
             lock (Gate)
             {
                 _requestedX = x;
                 _requestedY = y;
-                _dpi = dpi;
+                _requestedDpi = dpi;
+                _requestedWorking = working;
+                _requestedReduced = !NativeUi.AnimationsEnabled();
             }
             Win32.PostMessage(_hwnd, WM.PULSE_SHOW, 0, 0);
         }
@@ -262,12 +243,12 @@ internal static unsafe class CaretPulse
                 return 0;
 
             case WM.PULSE_HIDE:
-                // Fades out rather than vanishing; the timer stops once the fade completes.
-                if (_phase is Phase.In or Phase.Loop)
+                // The dots melt back into one drop and the capsule shrinks; the timer stops when
+                // the exit is complete.
+                if (_visible && _timeline.HidingAt is null)
                 {
-                    _phase = Phase.Out;
-                    _fadeOutAtTicks = Environment.TickCount64;
-                    Win32.SetTimer(hwnd, TimerId, FrameIntervalMs, 0);
+                    _timeline.HidingAt = Now();
+                    StartTimer(hwnd);
                 }
                 return 0;
 
@@ -292,33 +273,46 @@ internal static unsafe class CaretPulse
         int x;
         int y;
         uint dpi;
+        bool working;
+        bool reduced;
         lock (Gate)
         {
             x = _requestedX;
             y = _requestedY;
-            dpi = _dpi;
+            dpi = _requestedDpi;
+            working = _requestedWorking;
+            reduced = _requestedReduced;
         }
 
-        int width = NativeUi.Scale(SurfaceWidth, dpi);
-        int height = NativeUi.Scale(SurfaceHeight, dpi);
-        EnsureSurface(width, height);
-        if (_pixels == null) return;
-
-        Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, x, y, width, height, Win32.SWP_NOACTIVATE);
-        if (_phase is Phase.Hidden or Phase.Out)
+        double now = Now();
+        if (!_visible || _timeline.HidingAt is not null)
         {
-            // A show while hidden - or during a fade-out - starts the entrance rather than
-            // resuming a half-faded pill. A show while it is already up is a reposition or a
-            // promotion, and must not make it fade in a second time.
-            _shownAtTicks = Environment.TickCount64;
-            _phase = Phase.In;
+            // A show while hidden - or during the exit - starts the entrance. A show while the
+            // pill is up only promotes it: it does not move, and it does not come in again.
+            int width = NativeUi.Scale(SurfaceWidth, dpi);
+            int height = NativeUi.Scale(SurfaceHeight, dpi);
+            EnsureSurface(width, height);
+            if (_pixels == null) return;
+            _dpi = dpi;
+            _timeline = new PillScene.Timeline { ShownAt = now, Reduced = reduced };
+            _visible = true;
+            Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, x, y, width, height, Win32.SWP_NOACTIVATE);
+            // The first frame goes into the window before it is shown, so an old frame never flashes.
+            Paint(hwnd);
             Win32.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
         }
+        if (working && _timeline.WorkingAt is null) _timeline.WorkingAt = now;
         Paint(hwnd);
-        // Cast because the ternary is not a constant expression, so it will not widen to uint on
-        // its own the way the bare constant above does.
-        Win32.SetTimer(hwnd, TimerId, (uint)(_reducedMotion ? ReducedFrameIntervalMs : FrameIntervalMs), 0);
+        StartTimer(hwnd);
     }
+
+    private static void StartTimer(nint hwnd) =>
+        // Cast because the ternary is not a constant expression, so it will not widen to uint on
+        // its own.
+        Win32.SetTimer(hwnd, TimerId, (uint)(_timeline.Reduced ? ReducedFrameIntervalMs : FrameIntervalMs), 0);
+
+    /// <summary>Seconds on the high-resolution clock. TickCount64 moves in 15.6 ms steps, which shows as judder.</summary>
+    private static double Now() => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
 
     private static void EnsureSurface(int width, int height)
     {
@@ -371,52 +365,23 @@ internal static unsafe class CaretPulse
 
     private static void Paint(nint hwnd)
     {
-        if (_pixels == null || _memoryDc == 0) return;
-
-        long now = Environment.TickCount64;
-        bool reduced = _reducedMotion;
-        // Reduced motion gets no entrance: it appears, rather than arriving.
-        int fadeIn = reduced ? 1 : FadeInMs;
-        int fadeOut = reduced ? 1 : FadeOutMs;
-
-        // Entrance and exit: opacity plus a small scale, which is what makes it read as arriving
-        // rather than blinking on.
-        float opacity = 1f;
-        bool settled = false;
-        switch (_phase)
+        if (_pixels == null || _memoryDc == 0 || !_visible)
         {
-            case Phase.In:
-                float inProgress = Math.Clamp((now - _shownAtTicks) / (float)fadeIn, 0f, 1f);
-                opacity = EaseOut(inProgress);
-                if (inProgress >= 1f) _phase = Phase.Loop;
-                break;
-
-            case Phase.Loop:
-                // A capsule that is up but not sweeping has nothing left to animate. Draw this
-                // frame and stop the timer; promoting it posts PULSE_SHOW, which starts it again.
-                settled = !_sweeping;
-                break;
-
-            case Phase.Out:
-                float outProgress = Math.Clamp((now - _fadeOutAtTicks) / (float)fadeOut, 0f, 1f);
-                opacity = 1f - EaseOut(outProgress);
-                if (outProgress >= 1f)
-                {
-                    _phase = Phase.Hidden;
-                    Win32.KillTimer(hwnd, TimerId);
-                    Win32.ShowWindow(hwnd, Win32.SW_HIDE);
-                    return;
-                }
-                break;
-
-            case Phase.Hidden:
-                Win32.KillTimer(hwnd, TimerId);
-                return;
+            Win32.KillTimer(hwnd, TimerId);
+            return;
         }
 
-        // 0.94 -> 1.0 on entry, and back down on exit. Nothing scales under reduced motion.
-        float scale = reduced ? 1f : 0.94f + 0.06f * opacity;
-        Render(now, opacity, scale, reduced);
+        double now = Now();
+        PillScene.FrameAt(now, _timeline, Frame);
+        if (Frame.Finished)
+        {
+            _visible = false;
+            Win32.KillTimer(hwnd, TimerId);
+            Win32.ShowWindow(hwnd, Win32.SW_HIDE);
+            return;
+        }
+        PillScene.Stage(now, _timeline, out double scale, out double opacity);
+        PillScene.Render(Frame, scale, opacity, _pixels, _width, _height, _dpi / 96.0);
 
         var size = new SIZE { cx = _width, cy = _height };
         var source = new POINT { X = 0, Y = 0 };
@@ -431,148 +396,7 @@ internal static unsafe class CaretPulse
         var destination = new POINT { X = bounds.Left, Y = bounds.Top };
         Win32.UpdateLayeredWindow(hwnd, 0, &destination, &size, _memoryDc, &source, 0, &blend, Win32.ULW_ALPHA);
 
-        if (settled) Win32.KillTimer(hwnd, TimerId);
-    }
-
-    /// <summary>
-    /// Draws the whole indicator in one pass over the surface. Everything is a signed distance to
-    /// the capsule, which gives antialiased edges, a soft shadow and a hairline rim from the same
-    /// number without any clipping regions or extra bitmaps.
-    /// </summary>
-    private static void Render(long now, float opacity, float scale, bool reduced)
-    {
-        new Span<uint>(_pixels, _width * _height).Clear();
-
-        float centreX = _width / 2f;
-        float centreY = _height / 2f;
-        float halfWidth = NativeUi.Scale(PillWidth, _dpi) / 2f * scale;
-        float halfHeight = NativeUi.Scale(PillHeight, _dpi) / 2f * scale;
-        float radius = halfHeight;
-        float shadowSpread = NativeUi.Scale(Margin, _dpi) * 0.9f;
-        float shadowDrop = NativeUi.Scale(2, _dpi);
-
-        bool sweeping = _sweeping;
-        float sweepHalfWidth = halfWidth * 0.34f;
-        float sweepCentreX;
-        float sweepFade;
-        if (reduced)
-        {
-            // Nothing travels: the segment sits in the middle and breathes. A crossfade in place
-            // is the substitution Apple and Microsoft both make for a moving indicator, and it
-            // answers the same question without anything crossing the screen.
-            sweepCentreX = centreX;
-            float cycle = (now % ReducedSweepPeriodMs) / (float)ReducedSweepPeriodMs;
-            sweepFade = 0.30f + 0.50f * (0.5f - 0.5f * MathF.Cos(cycle * MathF.PI * 2f));
-        }
-        else
-        {
-            // Sweep position: one pass left to right per period, entering and leaving beyond the
-            // ends so the bright segment appears to travel through the capsule rather than bounce
-            // inside it.
-            float phase = (now % SweepPeriodMs) / (float)SweepPeriodMs;
-            float travel = EaseInOut(phase);
-            // Overshoot is exactly one segment half-width at each end: enough for the light to
-            // enter and leave through the rim, but not so much that the capsule sits empty for
-            // part of the cycle - which is what a wider overshoot looked like, and it read as
-            // broken rather than as working.
-            sweepCentreX = centreX + (halfWidth + sweepHalfWidth) * (travel * 2f - 1f);
-            // Fade the segment at both ends of its run, so it never pops in or out at the rim.
-            sweepFade = MathF.Min(1f, MathF.Sin(phase * MathF.PI) * 1.8f);
-        }
-
-        for (int y = 0; y < _height; y++)
-        {
-            for (int x = 0; x < _width; x++)
-            {
-                float px = x + 0.5f;
-                float py = y + 0.5f;
-
-                // Drop shadow, measured against a capsule pushed down a couple of pixels.
-                float shadowDistance = CapsuleDistance(px, py - shadowDrop, centreX, centreY, halfWidth, halfHeight, radius);
-                if (shadowDistance < shadowSpread)
-                {
-                    float falloff = 1f - Math.Clamp(shadowDistance / shadowSpread, 0f, 1f);
-                    float shadowAlpha = falloff * falloff * 0.34f * opacity;
-                    if (shadowAlpha > 0.002f) Blend(x, y, 0, 0, 0, (byte)(shadowAlpha * 255));
-                }
-
-                float distance = CapsuleDistance(px, py, centreX, centreY, halfWidth, halfHeight, radius);
-
-                // Body.
-                float bodyCoverage = Math.Clamp(0.5f - distance, 0f, 1f);
-                if (bodyCoverage > 0f)
-                {
-                    Blend(x, y, 22, 24, 31, (byte)(bodyCoverage * 244 * opacity));
-                }
-
-                // Sweep, kept a pixel inside the body so the rim stays dark all the way round.
-                // Absent entirely in the quiet stage: a capsule with nothing moving in it is what
-                // says "heard you, not working yet".
-                float inner = distance + 1.4f;
-                if (sweeping && inner < 0f)
-                {
-                    float alongSweep = MathF.Abs(px - sweepCentreX) / sweepHalfWidth;
-                    if (alongSweep < 1f)
-                    {
-                        // Squared falloff gives a soft comet rather than a hard block, and the
-                        // inner term feathers it against the capsule wall.
-                        float profile = 1f - alongSweep;
-                        profile *= profile;
-                        float edge = Math.Clamp(-inner, 0f, 1f);
-                        float sweepAlpha = profile * edge * sweepFade * opacity;
-                        if (sweepAlpha > 0.002f)
-                        {
-                            // Hot core to cool edge: white-ish in the middle, periwinkle outside.
-                            byte r = (byte)(150 + 90 * profile);
-                            byte g = (byte)(162 + 84 * profile);
-                            byte b = (byte)(255);
-                            Blend(x, y, r, g, b, (byte)(sweepAlpha * 255));
-                        }
-                    }
-                }
-
-                // Hairline rim on top of everything, which is what keeps the capsule readable
-                // against a dark background where the shadow does nothing.
-                float rim = 1f - Math.Clamp(MathF.Abs(distance + 0.7f) * 1.6f, 0f, 1f);
-                if (rim > 0f)
-                {
-                    Blend(x, y, 255, 255, 255, (byte)(rim * 54 * opacity));
-                }
-            }
-        }
-    }
-
-    /// <summary>Signed distance to a capsule: negative inside, zero on the edge.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static float CapsuleDistance(
-        float px, float py, float centreX, float centreY, float halfWidth, float halfHeight, float radius)
-    {
-        float dx = MathF.Max(MathF.Abs(px - centreX) - (halfWidth - radius), 0f);
-        float dy = MathF.Max(MathF.Abs(py - centreY) - (halfHeight - radius), 0f);
-        return MathF.Sqrt(dx * dx + dy * dy) - radius;
-    }
-
-    private static float EaseOut(float t) => 1f - (1f - t) * (1f - t);
-
-    private static float EaseInOut(float t) => t < 0.5f ? 2f * t * t : 1f - 2f * (1f - t) * (1f - t);
-
-    /// <summary>Source-over blend in premultiplied alpha, the format UpdateLayeredWindow consumes.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Blend(int x, int y, byte red, byte green, byte blue, byte alpha)
-    {
-        if (alpha == 0) return;
-        uint* pixel = _pixels + y * _width + x;
-        uint existing = *pixel;
-        int inverse = 255 - alpha;
-
-        int outB = blue * alpha / 255 + (int)(existing & 0xFF) * inverse / 255;
-        int outG = green * alpha / 255 + (int)((existing >> 8) & 0xFF) * inverse / 255;
-        int outR = red * alpha / 255 + (int)((existing >> 16) & 0xFF) * inverse / 255;
-        int outA = alpha + (int)((existing >> 24) & 0xFF) * inverse / 255;
-
-        *pixel = ((uint)Math.Min(outA, 255) << 24)
-            | ((uint)Math.Min(outR, 255) << 16)
-            | ((uint)Math.Min(outG, 255) << 8)
-            | (uint)Math.Min(outB, 255);
+        // A still capsule has nothing left to draw. Promoting or hiding it starts the timer again.
+        if (Frame.Settled) Win32.KillTimer(hwnd, TimerId);
     }
 }

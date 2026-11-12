@@ -82,7 +82,7 @@ internal sealed unsafe class AgentWindow
 
         int result = MessageLoop();
 
-        CaretPulse.Shutdown();
+        ProgressPill.Shutdown();
         UnregisterHotkeys();
         _fix?.Dispose();
         _tray?.Dispose();

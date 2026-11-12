@@ -270,8 +270,8 @@ internal sealed unsafe class SettingsWindow
         y += 32;
 
         Label(labelX, y + 4, labelW, 18, "While working");
-        nint indicator = Combo(fieldX, y, 220, IdIndicator);
-        AddString(indicator, "Pulse next to the caret");
+        nint indicator = Combo(fieldX, y, 260, IdIndicator);
+        AddString(indicator, "Animation at the bottom of the screen");
         AddString(indicator, "Tray icon only");
         AddString(indicator, "Show nothing");
         y += 34;
@@ -489,7 +489,7 @@ internal sealed unsafe class SettingsWindow
         {
             1 => "tray",
             2 => "none",
-            _ => "caret",
+            _ => "animation",
         };
 
         for (int i = 0; i < 2 && i < result.Actions.Count; i++)
