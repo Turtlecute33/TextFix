@@ -91,18 +91,20 @@ enum ModelCatalog {
     static let customSlug = "custom"
 
     static let openRouter: [ModelEntry] = [
+        ModelEntry(slug: "~openai/gpt-luna-latest", displayName: "GPT Luna", tier: .cheap, zdr: true, cache: true),
         ModelEntry(slug: "~openai/gpt-mini-latest", displayName: "GPT Mini", tier: .medium, zdr: true, cache: true),
-        ModelEntry(slug: "~anthropic/claude-haiku-latest", displayName: "Claude Haiku", tier: .medium, zdr: true, cache: true),
+        ModelEntry(slug: "~anthropic/claude-haiku-latest", displayName: "Claude Haiku", tier: .cheap, zdr: true, cache: true),
         ModelEntry(slug: "deepseek/deepseek-v4-flash", displayName: "DeepSeek V4 Flash", tier: .cheap, zdr: true, cache: true),
         ModelEntry(slug: "x-ai/grok-4.3", displayName: "Grok 4.3", tier: .medium, zdr: true, cache: true),
-        ModelEntry(slug: "~google/gemini-flash-latest", displayName: "Gemini Flash", tier: .cheap, zdr: true, cache: true),
+        ModelEntry(slug: "~google/gemini-flash-latest", displayName: "Gemini Flash", tier: .medium, zdr: true, cache: true),
     ]
 
     static let payPerQ: [ModelEntry] = [
+        ModelEntry(slug: "~openai/gpt-luna-latest", displayName: "GPT Luna", tier: .cheap),
         ModelEntry(slug: "~openai/gpt-mini-latest", displayName: "GPT Mini", tier: .medium),
         ModelEntry(slug: "x-ai/grok-4.3", displayName: "Grok 4.3", tier: .medium),
-        ModelEntry(slug: "~anthropic/claude-haiku-latest", displayName: "Claude Haiku", tier: .medium),
-        ModelEntry(slug: "~google/gemini-flash-latest", displayName: "Gemini Flash", tier: .cheap),
+        ModelEntry(slug: "~anthropic/claude-haiku-latest", displayName: "Claude Haiku", tier: .cheap),
+        ModelEntry(slug: "~google/gemini-flash-latest", displayName: "Gemini Flash", tier: .medium),
         ModelEntry(slug: "deepseek/deepseek-v4-flash", displayName: "DeepSeek V4 Flash", tier: .cheap, zdr: true, cache: true),
     ]
 

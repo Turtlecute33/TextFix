@@ -197,6 +197,10 @@ enum Controls {
         let captionLabel = fieldLabel(caption)
         container.addSubview(captionLabel)
         container.addSubview(control)
+        // VoiceOver reads a pop-up button by its value only. The caption is its name.
+        if control is NSControl, (control.accessibilityLabel() ?? "").isEmpty {
+            control.setAccessibilityLabel(caption)
+        }
 
         var constraints: [NSLayoutConstraint] = [
             captionLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor),

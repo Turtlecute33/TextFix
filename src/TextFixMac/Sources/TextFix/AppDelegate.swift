@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.shutdown()
         DistributedNotificationCenter.default().removeObserver(self)
         Log.info("Agent stopped")
+        Log.flush()
     }
 
     /// Nothing can close the agent by accident: the settings window closing is not the app quitting.
@@ -136,6 +137,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if !action.hotkey.trimmingCharacters(in: .whitespaces).isEmpty {
                     Log.warn("Could not understand the hotkey for \(action.name): \(action.hotkey)")
                 }
+                continue
+            }
+            if let refusal = binding.refusal {
+                Log.warn("Hotkey for \(action.name) not registered: \(refusal)")
+                Toast.shared.show(
+                    title: "Hotkey not used",
+                    message: "\(action.name) (\(binding.display())): \(refusal). Set a different hotkey in TextFix settings.",
+                    isError: true)
                 continue
             }
             bindings.append((index, binding))
@@ -219,6 +228,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
+        // Cmd+W closes the settings window, as in each Mac app.
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
 
         NSApp.mainMenu = mainMenu
     }

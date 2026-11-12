@@ -262,9 +262,20 @@ enum TextTarget {
                 guard PasteboardBridge.setText(nextMarker, transient: true, concealed: true) else { return nil }
                 let mark = PasteboardBridge.changeCount
                 guard Keystrokes.sendCommandChord("c", eventDelayMsOverride: chordDelayMs) else { return nil }
-                return PasteboardBridge.waitForCopy(
+                guard let copied = PasteboardBridge.waitForCopy(
                     marker: nextMarker, baseline: mark, timeoutMs: options.copyTimeoutMs,
-                    maxUTF16: options.maxUTF16)
+                    maxUTF16: options.maxUTF16) else { return nil }
+                // A host that was slow can answer the first copy only now, with the selection and
+                // not the field. The field is fully selected at this point, so that text would
+                // replace all of it. Wait a moment and use the answer that comes last.
+                let seen = PasteboardBridge.changeCount
+                Keystrokes.sleep(ms: 50)
+                if PasteboardBridge.changeCount != seen,
+                   let later = PasteboardBridge.text(maxUTF16: options.maxUTF16),
+                   !later.isEmpty, later != nextMarker {
+                    return later
+                }
+                return copied
             }
 
             text = readWholeField(settleMs: Keystrokes.chordSettleMs, chordDelayMs: nil)

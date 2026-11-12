@@ -30,10 +30,11 @@ final class PasteboardSnapshot {
 /// the pasteboard to be rendered, and a payload that exists for one paste has no business being
 /// archived by the user's clipboard manager.
 enum PasteboardBridge {
-    /// Total ceiling on what we are willing to copy out and back in. A 40 MB screenshot on the
-    /// pasteboard is not worth two 40 MB copies on every fix; above the cap the item is skipped and
+    /// Total ceiling on what we are willing to copy out and back in. A screenshot is the usual
+    /// large item, and a Retina one is tens of megabytes as TIFF, so the cap must be above that
+    /// or the picture the user holds does not come back. Above the cap the item is skipped and
     /// the user is told the pasteboard could not be fully restored.
-    private static let maxSnapshotBytes = 4 * 1024 * 1024
+    private static let maxSnapshotBytes = 64 * 1024 * 1024
 
     /// The community convention that clipboard managers honour: an item carrying this type is a
     /// one-paste scratch value and must not be added to their history. Windows has three documented
@@ -178,16 +179,16 @@ enum PasteboardBridge {
     /// selection was empty); anything else is what the host copied.
     static func waitForCopy(marker: String, baseline: Int, timeoutMs: Int, maxUTF16: Int) -> String? {
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
-        var lastSeen = baseline
+        var moved = false
         // The marker has to survive the cap intact or "is the marker still there" stops being
         // decidable, so read at least far enough to recognise it.
         let readLimit = max(maxUTF16, marker.utf16.count + 1)
         while true {
-            let current = changeCount
-            if current != lastSeen {
-                lastSeen = current
-                if let copied = text(maxUTF16: readLimit), !copied.isEmpty, copied != marker { return copied }
-            }
+            // A host clears the pasteboard and then writes to it. The count moves on the clear
+            // only, so a read between the two finds nothing and no later change announces the
+            // text. After the first move, read on each pass until the text is there.
+            if !moved, changeCount != baseline { moved = true }
+            if moved, let copied = text(maxUTF16: readLimit), !copied.isEmpty, copied != marker { return copied }
             if Date() >= deadline { return nil }
             // The main thread owns the pasteboard for the length of a capture, so this is a sleep
             // rather than a run-loop spin: letting the run loop turn here would let a second

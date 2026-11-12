@@ -268,7 +268,7 @@ enum AiClient {
 
         defer { state.touch() }
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await data(for: request, deadline: deadline)
         guard let http = response as? HTTPURLResponse else {
             throw AiError(message: "Malformed API response", statusCode: AiStatus.unusableResponse)
         }
@@ -281,7 +281,34 @@ enum AiClient {
                 retryAfterMs: parseRetryAfterMs(http),
                 errorBody: body)
         }
-        return try parseContent(String(decoding: data.prefix(maxResponseBytes), as: UTF8.self))
+        guard data.count <= maxResponseBytes else {
+            // Refused, not cut: a cut body does not parse, and three more requests would end the
+            // same way.
+            throw AiError(message: "The answer of the provider was too large.")
+        }
+        return try parseContent(String(decoding: data, as: UTF8.self))
+    }
+
+    /// One request that ends at the deadline at the latest.
+    ///
+    /// The timeout of URLSession is an idle timeout: it starts again each time bytes arrive. A
+    /// provider that sends keep-alive bytes before its answer could hold one attempt for minutes,
+    /// while `requestBudgetMs` promises a wall clock for the full fix. The second task is that
+    /// clock.
+    private static func data(for request: URLRequest, deadline: Date) async throws -> (Data, URLResponse) {
+        try await withThrowingTaskGroup(of: (Data, URLResponse)?.self) { group in
+            defer { group.cancelAll() }
+            group.addTask { try await session.data(for: request) }
+            group.addTask {
+                let remaining = max(deadline.timeIntervalSinceNow, 0)
+                try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                return nil
+            }
+            guard let first = try await group.next(), let answer = first else {
+                throw AiError(message: "Request timed out")
+            }
+            return answer
+        }
     }
 
     /// Remaining read budget, or the configured timeout when the budget is not binding.

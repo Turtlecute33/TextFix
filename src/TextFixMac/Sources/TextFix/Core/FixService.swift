@@ -75,7 +75,14 @@ final class FixService {
         if !config.dryRun {
             apiKey = SecretStore.apiKey(for: provider)
             guard !apiKey.isEmpty else {
-                notify("No API key", "Add your \(provider.displayName) key in TextFix settings.", isError: true)
+                if SecretStore.lastReadFailed {
+                    notify(
+                        "API key not read",
+                        "The keychain did not give the key to TextFix. Unlock the login keychain, or save the key again in TextFix settings.",
+                        isError: true)
+                } else {
+                    notify("No API key", "Add your \(provider.displayName) key in TextFix settings.", isError: true)
+                }
                 return
             }
             guard let resolved = config.resolveModel(action) else {
@@ -209,16 +216,26 @@ final class FixService {
         self.capture = nil
         let config = self.config()
 
-        if let zdrFallbackModel, AiClient.shouldWarnAboutZdrFallback(zdrFallbackModel) {
-            notify(
-                "Zero data retention unavailable",
-                "No zero-retention route for \(zdrFallbackModel). TextFix used a provider that does not keep your text for training.",
-                isError: false)
+        // There is one place on screen for a notice, and a new notice replaces the one before it.
+        // The zero-data-retention notice is shown one time for each model, so it goes last and
+        // only when this fix has nothing else to say. If not, it stays for the next fix.
+        var said = false
+        func tell(_ title: String, _ message: String, isError: Bool) {
+            said = true
+            notify(title, message, isError: isError)
+        }
+        defer {
+            if let zdrFallbackModel, !said, AiClient.shouldWarnAboutZdrFallback(zdrFallbackModel) {
+                notify(
+                    "Zero data retention unavailable",
+                    "No zero-retention route for \(zdrFallbackModel). TextFix used a provider that does not keep your text for training.",
+                    isError: false)
+            }
         }
 
         if let error {
             restoreAfterCapture(capture)
-            notify("Text fix failed", error, isError: true)
+            tell("Text fix failed", error, isError: true)
             return
         }
         guard let text, let capture else {
@@ -231,13 +248,13 @@ final class FixService {
         let answer = AiText.sanitize(AiText.unwrap(text, prompt: prompt))
         guard !answer.isEmpty else {
             restoreAfterCapture(capture)
-            notify("Text fix failed", "The model returned nothing usable.", isError: true)
+            tell("Text fix failed", "The model returned nothing usable.", isError: true)
             return
         }
         guard answer.utf16.count <= AiText.outputLimit(inputLength: capture.text.utf16.count) else {
             // Refused, never cut: a shortened answer pasted over the field deletes its end.
             restoreAfterCapture(capture)
-            notify("Text fix failed", "The answer was much longer than your text, so nothing was changed.", isError: true)
+            tell("Text fix failed", "The answer was much longer than your text, so nothing was changed.", isError: true)
             return
         }
         let proposed = AiText.keepEdgeWhitespace(original: capture.text, answer: answer)
@@ -245,7 +262,7 @@ final class FixService {
             // Nothing to change. Writing identical text would still cost the user an undo step and
             // a scroll jump, so leave the field alone - but say so, or the hotkey looks dead.
             restoreAfterCapture(capture)
-            notify("No changes needed", "The text is already fine as it is.", isError: false)
+            tell("No changes needed", "The text is already fine as it is.", isError: false)
             return
         }
 
@@ -261,7 +278,7 @@ final class FixService {
             mode: config.replaceModeValue,
             beforePaste: {
                 guard config.restorePasteboard else { return }
-                if restoreTo == nil || PasteboardBridge.changeCount != capture.pasteboardCount {
+                if restoreTo == nil || self.userCopiedSince(capture) {
                     restoreTo = PasteboardBridge.snapshot()
                 }
             })
@@ -276,7 +293,7 @@ final class FixService {
                 // asynchronously after Cmd+V returns.
                 schedulePasteboardRestore(restoreTo, afterMs: config.pasteboardRestoreDelayMs)
                 if !restoreTo.complete {
-                    notify(
+                    tell(
                         "Clipboard partly restored",
                         "Some clipboard content could not be copied back.",
                         isError: false)
@@ -292,7 +309,7 @@ final class FixService {
             let reason = outcome == .unconfirmed
                 ? "The app did not confirm the change."
                 : "Focus or the text changed while TextFix worked."
-            notify(
+            tell(
                 "Text not replaced",
                 replacing
                     ? "\(reason) The fixed text is on your clipboard, replacing what was there."
@@ -305,7 +322,7 @@ final class FixService {
 
         case .failed:
             restorePasteboardNow(restoreTo)
-            notify("Text fix failed", "Could not put the fixed text back.", isError: true)
+            tell("Text fix failed", "Could not put the fixed text back.", isError: true)
         }
     }
 
@@ -346,11 +363,22 @@ final class FixService {
     /// and it is now what they are holding; the older snapshot would overwrite it.
     private func restoreAfterCapture(_ capture: TextCapture?) {
         guard let capture, let saved = capture.saved else { return }
-        guard PasteboardBridge.changeCount == capture.pasteboardCount else {
+        guard !userCopiedSince(capture) else {
             Log.debug("The pasteboard changed during the request; left as it is")
             return
         }
         PasteboardBridge.restoreOrClear(saved)
+    }
+
+    /// True when the pasteboard holds something new that is not the text of the capture.
+    ///
+    /// The change count alone does not tell: a host that answers a copy late moves it too, and
+    /// then the pasteboard holds the captured text again. To read that as a copy by the user
+    /// would drop the snapshot and leave the user with the text of the field as their clipboard.
+    private func userCopiedSince(_ capture: TextCapture) -> Bool {
+        guard PasteboardBridge.changeCount != capture.pasteboardCount else { return false }
+        guard capture.source == .pasteboard else { return true }
+        return PasteboardBridge.text(maxUTF16: capture.text.utf16.count + 1) != capture.text
     }
 
     // ---- shared ----

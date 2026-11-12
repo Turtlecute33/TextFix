@@ -95,6 +95,22 @@ struct HotkeyBinding: Equatable {
     var isSafeWithoutModifiers: Bool {
         KeyNames.functionKeys13Through20.contains(keyCode)
     }
+
+    /// Why this binding must not be registered, or nil when it is safe. The settings window
+    /// refuses these keys when they are recorded. A config.json edited by hand gets the same
+    /// check, by key position because there is no key event to read the letter from.
+    var refusal: String? {
+        if modifiers & ~UInt32(shiftKey) == 0 && !isSafeWithoutModifiers {
+            return "it has no Control, Option or Command, so no app could type that key"
+        }
+        let ownChords: Set<Int> = [
+            kVK_ANSI_A, kVK_ANSI_C, kVK_ANSI_V, kVK_ANSI_X, kVK_ANSI_Z, kVK_ANSI_Q, kVK_ANSI_W,
+        ]
+        if modifiers == UInt32(cmdKey), ownChords.contains(Int(keyCode)) {
+            return "it is a standard shortcut, and TextFix sends some of them itself"
+        }
+        return nil
+    }
 }
 
 enum KeyNames {
@@ -164,7 +180,15 @@ enum KeyNames {
         UInt32(kVK_F17), UInt32(kVK_F18), UInt32(kVK_F19), UInt32(kVK_F20),
     ]
 
-    static func keyCode(for lowerName: String) -> UInt32? { byName[lowerName] }
+    /// A key with no name is written as hex ("0xA" is the § key of an ISO keyboard), so the same
+    /// form must read back, or the hotkey is gone after the next launch.
+    static func keyCode(for lowerName: String) -> UInt32? {
+        if let code = byName[lowerName] { return code }
+        guard lowerName.hasPrefix("0x"), let code = UInt32(lowerName.dropFirst(2), radix: 16), code <= 0x7F else {
+            return nil
+        }
+        return code
+    }
 
     /// The name written to config.json.
     static func name(for keyCode: UInt32) -> String {

@@ -34,7 +34,10 @@ enum AiStatus {
     /// same answer, so it is neither used nor retried.
     static let answerCutShort = -3
 
-    private static let retryable: Set<Int> = [408, 425, 429, 500, 502, 503, 504, unusableResponse]
+    /// 520 to 524 are errors of the Cloudflare edge in front of the provider. They clear in a moment.
+    private static let retryable: Set<Int> = [
+        408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, unusableResponse,
+    ]
 
     static func isRetryable(_ statusCode: Int) -> Bool { retryable.contains(statusCode) }
 }
@@ -173,6 +176,10 @@ enum AiErrors {
         if let ai = error as? AiError {
             if ai.statusCode == 429 || ai.statusCode == 503 {
                 return "Provider is rate limiting. Try again in a moment."
+            }
+            // OpenRouter answers a slug that it does not know with 400, not with 404.
+            if ai.statusCode == 400, ai.errorBody.lowercased().contains("not a valid model") {
+                return actionable(404) ?? fallback
             }
             if let actionable = actionable(ai.statusCode) { return actionable }
             if !ai.message.trimmingCharacters(in: .whitespaces).isEmpty { return scrub(ai.message) }

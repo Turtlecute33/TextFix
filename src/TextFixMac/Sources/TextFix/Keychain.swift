@@ -22,6 +22,10 @@ enum SecretStore {
         ]
     }
 
+    /// True when the last read failed for a reason other than "no key is stored": a locked
+    /// keychain, or a refused prompt. The caller uses it to tell the user the real cause.
+    private(set) static var lastReadFailed = false
+
     static func apiKey(for provider: AiProvider) -> String {
         var query = baseQuery(provider)
         query[kSecReturnData as String] = true
@@ -29,6 +33,7 @@ enum SecretStore {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
+        lastReadFailed = status != errSecSuccess && status != errSecItemNotFound
         guard status == errSecSuccess, var data = item as? Data else {
             if status != errSecItemNotFound {
                 // A keychain that refuses to answer must read as "no key" rather than taking the

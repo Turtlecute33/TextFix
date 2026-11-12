@@ -604,8 +604,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Deliberately a shape check, not a format check: both providers issue keys in their own
     /// shapes and a third could change tomorrow. All this has to catch is the accident - a field
     /// that was showing a saved key and now holds one or two characters.
+    /// Printable ASCII only. A key copied from a PDF or a web page can carry a zero-width space
+    /// or a typographic hyphen, and then each request fails with an error that does not name it.
     private static func looksLikeApiKey(_ value: String) -> Bool {
-        value.count >= 16 && !value.contains(where: \.isWhitespace)
+        value.count >= 16 && value.unicodeScalars.allSatisfy { (0x21...0x7E).contains($0.value) }
     }
 
     private func complain(_ message: String) {
@@ -630,6 +632,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
         previousApp = nil
         onClosed(result)
+    }
+
+    /// A hotkey field records until it is no longer the first responder, and the hotkeys are
+    /// off while it records. A window that goes to the background keeps its first responder, so
+    /// without this a click in a different app leaves all hotkeys off with no message.
+    func windowDidResignKey(_ notification: Notification) {
+        if window?.firstResponder is HotkeyField { window?.makeFirstResponder(nil) }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

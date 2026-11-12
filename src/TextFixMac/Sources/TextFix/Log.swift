@@ -54,6 +54,10 @@ enum Log {
         return formatter
     }()
 
+    /// Waits for the lines that are still in the queue. Called before the agent stops, or the
+    /// last lines, "Agent stopped" included, do not reach the file.
+    static func flush() { queue.sync {} }
+
     private static func write(_ level: String, _ message: @escaping () -> String) {
         // Off the caller's thread: a fix must never wait on a disk write, and serialising here is
         // what makes the file safe to append to from the request task and the main thread at once.
