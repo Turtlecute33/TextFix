@@ -57,6 +57,21 @@ internal sealed class FixService
     private volatile string? _zdrFallbackModel;
     private ClipboardSnapshot? _pendingRestore;
 
+    /// <summary>
+    /// The sequence number just after the paste, and the text of the paste. A restore that finds
+    /// something different does not write: the user copied in the delay.
+    /// </summary>
+    private uint _pendingPasteSequence;
+    private string? _pendingPasteText;
+
+    /// <summary>A restore that found the clipboard held by another process is tried again.</summary>
+    private const int MaxRestoreAttempts = 5;
+    private const uint RestoreRetryMs = 200;
+    private int _restoreAttempts;
+
+    /// <summary>True when this completion already showed a notice, so the ZDR notice waits.</summary>
+    private bool _said;
+
     /// <summary>True while an indicator is on screen, so every exit path can take it down again.</summary>
     private bool _indicatorShown;
 
@@ -194,23 +209,34 @@ internal sealed class FixService
 
         _ = Task.Run(async () =>
         {
+            string? resultText = null;
+            string? errorText = null;
+            string? zdrFallbackModel = null;
             try
             {
                 AiResult result = await AiClient.FixTextAsync(input, request, cts.Token).ConfigureAwait(false);
-                _resultText = result.Text;
-                if (result.FellBackFromZdr) _zdrFallbackModel = request.Model;
+                resultText = result.Text;
+                if (result.FellBackFromZdr) zdrFallbackModel = request.Model;
             }
             catch (OperationCanceledException)
             {
-                _errorText = null; // the user asked for it; nothing to report
+                // The user asked for it; nothing to report.
             }
             catch (Exception e)
             {
                 Log.Warn("Text fix failed: " + AiErrors.Scrub(e.GetType().Name + ": " + e.Message));
-                _errorText = AiErrors.UserFacing(e, "Could not fix that text.");
+                errorText = AiErrors.UserFacing(e, "Could not fix that text.");
             }
             finally
             {
+                // A cancelled request can end after the next one started. Its token is old then,
+                // and it must not write its result or its error into the fields of the new one.
+                if (Volatile.Read(ref _token) == token)
+                {
+                    _resultText = resultText;
+                    _errorText = errorText;
+                    _zdrFallbackModel = zdrFallbackModel;
+                }
                 // Hand control back to the message thread; it owns the clipboard and the caret.
                 Win32.PostMessage(_hwnd, WM.FIX_COMPLETE, (nuint)token, 0);
             }
@@ -238,6 +264,24 @@ internal sealed class FixService
     {
         if (token != _token || _state != State.Working) return; // stale or cancelled
 
+        string? fallbackModel = _zdrFallbackModel;
+        _said = false;
+        CompleteRequest();
+
+        // There is one balloon, and a new notice replaces the one before it. The zero-data-retention
+        // notice is shown one time for each model, so it goes last and only when this fix has
+        // nothing else to say. If not, it stays for the next fix.
+        if (fallbackModel != null && !_said && AiClient.ShouldWarnAboutZdrFallback(fallbackModel))
+        {
+            Notify(
+                "Zero data retention unavailable",
+                "No zero-retention route for " + fallbackModel + ". TextFix used a provider that does not keep your text for training.",
+                isError: false);
+        }
+    }
+
+    private void CompleteRequest()
+    {
         _state = State.Idle;
         _cts = null;
         HideIndicator();
@@ -245,14 +289,6 @@ internal sealed class FixService
         TextCapture? capture = _capture;
         _capture = null;
         AppConfig config = _config();
-
-        if (_zdrFallbackModel is string fallbackModel && AiClient.ShouldWarnAboutZdrFallback(fallbackModel))
-        {
-            Notify(
-                "Zero data retention unavailable",
-                "No zero-retention route for " + fallbackModel + ". TextFix used a provider that does not keep your text for training.",
-                isError: false);
-        }
 
         if (_errorText is string error)
         {
@@ -317,6 +353,9 @@ internal sealed class FixService
                     // asynchronously after Ctrl+V returns. Restoring on a timer keeps the message
                     // thread free in the meantime.
                     _pendingRestore = restoreTo;
+                    _pendingPasteSequence = ClipboardBridge.SequenceNumber();
+                    _pendingPasteText = proposed;
+                    _restoreAttempts = 0;
                     Win32.SetTimer(_hwnd, RestoreTimerId, (uint)Math.Max(config.ClipboardRestoreDelayMs, 1), 0);
                 }
                 if (restoreTo is { Complete: false })
@@ -354,13 +393,18 @@ internal sealed class FixService
                 break;
 
             default:
+                // Ctrl+A left the whole field selected and the paste did not go out.
+                if (capture.Mode == CaptureMode.WholeText && TextTarget.StillFocused(capture))
+                {
+                    Keystrokes.CollapseSelection();
+                }
                 if (restoreTo != null) ClipboardBridge.RestoreOrClear(restoreTo, _hwnd);
                 Notify("Text fix failed", "Could not paste the fixed text.", isError: true);
                 break;
         }
     }
 
-    internal void OnRestoreTimer() => FlushPendingRestore();
+    internal void OnRestoreTimer() => FlushPendingRestore(fromTimer: true);
 
     /// <summary>
     /// Runs a clipboard restore that is still sitting on the timer, right now.
@@ -370,13 +414,49 @@ internal sealed class FixService
     /// GetMessage retrieves WM_QUIT well ahead of WM_TIMER in the queue's priority order. Either
     /// way the user's clipboard would be gone and our own output left sitting in its place.
     /// </summary>
-    internal void FlushPendingRestore()
+    internal void FlushPendingRestore(bool fromTimer = false)
     {
         ClipboardSnapshot? snapshot = _pendingRestore;
         if (snapshot == null) return;
-        _pendingRestore = null;
         Win32.KillTimer(_hwnd, RestoreTimerId);
-        ClipboardBridge.RestoreOrClear(snapshot, _hwnd);
+
+        // The sequence number alone does not tell: a clipboard manager that makes the host render
+        // a format moves it too. Only a clipboard that no longer holds the paste is a copy by the
+        // user, and that copy stays.
+        if (_pendingPasteText is string pasted
+            && ClipboardBridge.SequenceNumber() != _pendingPasteSequence
+            && !string.Equals(ClipboardBridge.GetText(_hwnd, pasted.Length + 1), pasted, StringComparison.Ordinal))
+        {
+            Log.Debug("The clipboard changed after the paste; left as it is");
+            ForgetPendingRestore();
+            return;
+        }
+
+        if (ClipboardBridge.RestoreOrClear(snapshot, _hwnd))
+        {
+            ForgetPendingRestore();
+            return;
+        }
+
+        // Another process holds the clipboard. On the timer there is time to try again. The
+        // other callers (a new fix, a cancel, a quit) need the answer now.
+        if (fromTimer && ++_restoreAttempts < MaxRestoreAttempts)
+        {
+            Win32.SetTimer(_hwnd, RestoreTimerId, RestoreRetryMs, 0);
+            return;
+        }
+        ForgetPendingRestore();
+        Notify(
+            "Clipboard not restored",
+            "Another app held the clipboard, so TextFix could not put back what you had copied.",
+            isError: true);
+    }
+
+    private void ForgetPendingRestore()
+    {
+        _pendingRestore = null;
+        _pendingPasteText = null;
+        _restoreAttempts = 0;
     }
 
     /// <summary>
@@ -435,6 +515,7 @@ internal sealed class FixService
     {
         if (isError) Log.Warn(title + ": " + message);
         else Log.Info(title + ": " + message);
+        _said = true;
         if (_config().NotifyOnError) _tray.ShowBalloon(title, message, isError);
     }
 

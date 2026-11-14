@@ -142,6 +142,9 @@ internal static unsafe class TextTarget
             }
         }
         string? probeMarker = null;
+        // True after Ctrl+A went out. A failure after that must not leave the field selected:
+        // with all the text selected, the next key that the user types would replace it.
+        bool selectedAll = false;
 
         // Every failure below happens after the clipboard has been overwritten with a probe
         // marker, so failing has to put the user's clipboard back. Nothing else in the pipeline
@@ -149,6 +152,14 @@ internal static unsafe class TextTarget
         // rather than assigned because a local function cannot touch an out parameter.
         string Cleanup(string message)
         {
+            if (selectedAll)
+            {
+                nint now = Win32.GetForegroundWindow();
+                if (now == foreground && (focus == 0 || GetFocusWindow(now) == focus))
+                {
+                    Keystrokes.CollapseSelection();
+                }
+            }
             if (saved != null) ClipboardBridge.RestoreOrClear(saved, owner);
             else if (probeMarker != null
                 && ClipboardBridge.GetText(owner, probeMarker.Length + 1) == probeMarker)
@@ -207,6 +218,7 @@ internal static unsafe class TextTarget
             string? ReadWholeField(int settleMs, int? chordDelayMs)
             {
                 if (!Keystrokes.SendCtrlChord(VK.KEY_A, chordDelayMs)) return null;
+                selectedAll = true;
                 Thread.Sleep(settleMs);
 
                 probeMarker = ClipboardBridge.NewProbeMarker();

@@ -274,12 +274,13 @@ internal static unsafe class ClipboardBridge
         }
     }
 
-    internal static void Restore(ClipboardSnapshot snapshot, nint owner)
+    /// <summary>False when the clipboard could not be opened or emptied, so nothing was put back.</summary>
+    internal static bool Restore(ClipboardSnapshot snapshot, nint owner)
     {
-        if (!TryOpen(owner)) return;
+        if (!TryOpen(owner)) return false;
         try
         {
-            if (!Win32.EmptyClipboard()) return;
+            if (!Win32.EmptyClipboard()) return false;
             foreach ((uint format, byte[] data) in snapshot.Blobs)
             {
                 nint handle = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (nuint)data.Length);
@@ -301,6 +302,7 @@ internal static unsafe class ClipboardBridge
                 if (Win32.SetClipboardData(format, handle) == 0) Win32.GlobalFree(handle);
             }
             if (snapshot.Sensitive) MarkTransient();
+            return true;
         }
         finally
         {
@@ -313,22 +315,19 @@ internal static unsafe class ClipboardBridge
     /// nothing there to begin with - leaving our own scratch content behind would be a change the
     /// user never asked for.
     /// </summary>
-    internal static void RestoreOrClear(ClipboardSnapshot snapshot, nint owner)
-    {
-        if (snapshot.IsEmpty) Clear(owner);
-        else Restore(snapshot, owner);
-    }
+    internal static bool RestoreOrClear(ClipboardSnapshot snapshot, nint owner) =>
+        snapshot.IsEmpty ? Clear(owner) : Restore(snapshot, owner);
 
     /// <summary>
     /// Clears the clipboard entirely. Used when there was nothing to restore, so the fixed text
     /// does not linger after the paste.
     /// </summary>
-    internal static void Clear(nint owner)
+    internal static bool Clear(nint owner)
     {
-        if (!TryOpen(owner)) return;
+        if (!TryOpen(owner)) return false;
         try
         {
-            Win32.EmptyClipboard();
+            return Win32.EmptyClipboard();
         }
         finally
         {

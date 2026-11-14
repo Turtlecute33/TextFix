@@ -348,15 +348,17 @@ internal static unsafe class ProgressPill
 
     private static void ReleaseSurface()
     {
-        if (_bitmap != 0)
-        {
-            Win32.DeleteObject(_bitmap);
-            _bitmap = 0;
-        }
+        // The DC goes first. DeleteObject fails for a bitmap that is still selected into a DC,
+        // and the bitmap would then leak at each change of the surface size.
         if (_memoryDc != 0)
         {
             Win32.DeleteDC(_memoryDc);
             _memoryDc = 0;
+        }
+        if (_bitmap != 0)
+        {
+            Win32.DeleteObject(_bitmap);
+            _bitmap = 0;
         }
         _pixels = null;
         _width = 0;

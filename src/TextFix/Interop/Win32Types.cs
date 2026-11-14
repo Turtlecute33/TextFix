@@ -205,6 +205,7 @@ internal static class WM
     public const uint CLOSE = 0x0010;
     public const uint QUIT = 0x0012;
     public const uint ERASEBKGND = 0x0014;
+    public const uint ENDSESSION = 0x0016;
     public const uint SETFONT = 0x0030;
     public const uint GETFONT = 0x0031;
     public const uint SETICON = 0x0080;

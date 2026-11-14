@@ -293,7 +293,11 @@ internal sealed class AppConfig
         }
     }
 
-    internal void Save()
+    /// <summary>
+    /// False when the file could not be written. The caller tells the user: the session has the
+    /// new values, and the next launch would not.
+    /// </summary>
+    internal bool Save()
     {
         try
         {
@@ -311,10 +315,12 @@ internal sealed class AppConfig
             string temp = FilePath + ".tmp";
             File.WriteAllText(temp, json);
             File.Move(temp, FilePath, overwrite: true);
+            return true;
         }
         catch (Exception e)
         {
             Log.Warn("Could not save config.json: " + e.GetType().Name);
+            return false;
         }
     }
 

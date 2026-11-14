@@ -73,8 +73,10 @@ internal sealed unsafe class AgentWindow
             // waiting for the user to press a hotkey and get an error.
             OpenSettings();
         }
-        else if (_config.PrewarmOnStartup && SecretStore.HasApiKey(_config.ProviderValue))
+        else if (_config.PrewarmOnStartup && !_config.LoadFailed && SecretStore.HasApiKey(_config.ProviderValue))
         {
+            // Not after a config.json that could not be read: the defaults would bring this back
+            // for a user who turned it off.
             // Warms the TLS session so the first fix of the session is as fast as the second.
             // Opt-out, because it is the one thing the agent does without being asked.
             AiClient.Prewarm(_config.ProviderValue);
@@ -211,6 +213,18 @@ internal sealed unsafe class AgentWindow
                 // Nothing can close the agent by accident; only the tray menu quits it.
                 return 0;
 
+            case WM.ENDSESSION:
+                // Sign-out or shutdown. The process ends when this returns, with no WM_DESTROY,
+                // so the request stops and the last log lines go to the file here.
+                if (wParam != 0)
+                {
+                    _fix?.Cancel();
+                    _fix?.FlushPendingRestore();
+                    Log.Info("Agent stopped: the session ends");
+                    Log.Flush();
+                }
+                return 0;
+
             case WM.DESTROY:
                 // A clipboard restore still on the timer has to happen here, before the queue is
                 // torn down. GetMessage retrieves WM_QUIT well ahead of WM_TIMER, so a quit inside
@@ -281,8 +295,10 @@ internal sealed unsafe class AgentWindow
                 return;
             case MenuPause:
                 _paused = !_paused;
+                // Settings holds the hotkeys released while it is open, so that its hotkey field
+                // can record them. It registers them again when it closes.
                 if (_paused) UnregisterHotkeys();
-                else RegisterHotkeys();
+                else if (_settings == null) RegisterHotkeys();
                 _tray?.SetTooltip(_paused ? "TextFix - hotkeys paused" : IdleTooltip);
                 return;
             case MenuOpenLog:
@@ -351,8 +367,17 @@ internal sealed unsafe class AgentWindow
         {
             _config = saved;
             _config.Normalize();
-            _config.Save();
-            Log.Info("Settings saved");
+            if (_config.Save())
+            {
+                Log.Info("Settings saved");
+            }
+            else
+            {
+                _tray?.ShowBalloon(
+                    "Settings not saved",
+                    "config.json could not be written. The new settings stay until TextFix quits. The log has the details.",
+                    isError: true);
+            }
         }
         ApplyConfig();
     }

@@ -83,6 +83,12 @@ internal sealed unsafe class SettingsWindow
     private bool _apiKeyDirty;
 
     /// <summary>
+    /// A key typed for a provider that is not the one shown now. It is kept, so a change of the
+    /// provider and back does not lose it, and Save stores it with the others.
+    /// </summary>
+    private readonly Dictionary<AiProvider, string> _typedKeys = [];
+
+    /// <summary>
     /// What each hotkey control was loaded with, in the control's own encoding. The control cannot
     /// show the Windows key or a key outside its name table, so a binding the user did not
     /// re-record is kept exactly as config.json had it rather than re-read through the control.
@@ -380,6 +386,14 @@ internal sealed unsafe class SettingsWindow
     private void LoadValues()
     {
         SetComboIndex(IdProvider, _provider == AiProvider.PayPerQ ? 1 : 0);
+        // A slug written into config.json that the list does not have is shown as the custom
+        // model. If not, the list shows its first entry and Save writes that entry over the slug.
+        string slug = (_config.Model ?? string.Empty).Trim();
+        if (slug.Length > 0 && !ModelCatalog.Supports(_provider, slug))
+        {
+            _config.CustomModel = slug;
+            _config.Model = ModelCatalog.CustomSlug;
+        }
         PopulateModels();
 
         SetText(IdApiKey, SecretStore.HasApiKey(_provider) ? KeyPlaceholder : string.Empty);
@@ -540,10 +554,12 @@ internal sealed unsafe class SettingsWindow
         }
 
         // The API key is written straight to the secret store rather than into the config object,
-        // so it never passes through config.json.
-        if (_apiKeyDirty)
+        // so it never passes through config.json. A key typed for the other provider is stored too.
+        var editedKeys = new Dictionary<AiProvider, string>(_typedKeys);
+        if (_apiKeyDirty) editedKeys[_provider] = GetText(IdApiKey);
+        foreach ((AiProvider keyProvider, string field) in editedKeys)
         {
-            string field = GetText(IdApiKey);
+            string name = keyProvider.DisplayName();
             // Typing or pasting into the field while it shows the saved-key placeholder appends to
             // the bullets. No key contains one, so they are dropped instead of being saved as the
             // start of a key that then fails every request.
@@ -555,9 +571,9 @@ internal sealed unsafe class SettingsWindow
             else if (typed.Length == 0)
             {
                 // An emptied field removes the key.
-                if (!SecretStore.SetApiKey(_provider, string.Empty))
+                if (!SecretStore.SetApiKey(keyProvider, string.Empty))
                 {
-                    Complain("Could not remove the stored API key. The log has the details.");
+                    Complain("Could not remove the stored " + name + " API key. The log has the details.");
                     return false;
                 }
             }
@@ -567,13 +583,13 @@ internal sealed unsafe class SettingsWindow
                 // saved as that keystroke. Nothing that short is a key, so say so rather than
                 // silently replacing a key that worked with one that cannot.
                 Complain(
-                    "That does not look like an API key. Paste the whole key, or clear the field"
-                    + " to remove the one you have.");
+                    "The " + name + " key does not look like an API key. Paste the whole key, or clear"
+                    + " the field to remove the one you have.");
                 return false;
             }
-            else if (!SecretStore.SetApiKey(_provider, typed))
+            else if (!SecretStore.SetApiKey(keyProvider, typed))
             {
-                Complain("Could not save the API key. The log has the details.");
+                Complain("Could not save the " + name + " API key. The log has the details.");
                 return false;
             }
         }
@@ -705,11 +721,20 @@ internal sealed unsafe class SettingsWindow
                 Close(null);
                 return;
             case IdProvider when notification == CBN_SELCHANGE:
+                if (_apiKeyDirty) _typedKeys[_provider] = GetText(IdApiKey);
                 _provider = GetComboIndex(IdProvider) == 1 ? AiProvider.PayPerQ : AiProvider.OpenRouter;
                 // Each provider has its own key and its own model namespace, so both fields follow
                 // the selection instead of carrying a value that would fail on the new provider.
-                SetText(IdApiKey, SecretStore.HasApiKey(_provider) ? KeyPlaceholder : string.Empty);
-                _apiKeyDirty = false;
+                if (_typedKeys.Remove(_provider, out string? keptKey))
+                {
+                    SetText(IdApiKey, keptKey);
+                    _apiKeyDirty = true;
+                }
+                else
+                {
+                    SetText(IdApiKey, SecretStore.HasApiKey(_provider) ? KeyPlaceholder : string.Empty);
+                    _apiKeyDirty = false;
+                }
                 if (!ModelCatalog.Supports(_provider, _config.Model)) _config.Model = ModelCatalog.For(_provider)[0].Slug;
                 PopulateModels();
                 UpdateEnabledState();

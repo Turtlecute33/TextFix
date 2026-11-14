@@ -41,14 +41,23 @@ internal static class AiClient
     private const string AppTitle = "TextFix";
     private const string AppCategories = "writing-assistant";
 
-    private const long PrewarmMinGapMs = 90_000;
+    private const long OpenRouterPrewarmGapMs = 90_000;
+    private const long PayPerQPrewarmGapMs = 4_000;
     private const int PrewarmTimeoutMs = 5_000;
+
+    /// <summary>
+    /// How long after the last contact a pooled connection is taken to be open. OpenRouter keeps
+    /// an idle connection for minutes. PayPerQ closes it after 5 seconds (Keep-Alive: timeout=5),
+    /// so a longer gap there skips the pre-warm exactly when the connection is gone.
+    /// </summary>
+    private static long PrewarmMinGapMs(AiProvider provider) =>
+        provider == AiProvider.PayPerQ ? PayPerQPrewarmGapMs : OpenRouterPrewarmGapMs;
 
     private static readonly HttpClient Http = CreateClient();
     // Starts a full gap in the past rather than at zero: TickCount64 counts from boot, so a zero
     // here made every prewarm in the first 90 s after boot - the sign-in one it exists for - look
     // too soon after a contact that never happened.
-    private static long _lastContactTicks = -PrewarmMinGapMs;
+    private static long _lastContactTicks = -OpenRouterPrewarmGapMs;
     private static int _prewarmInFlight;
 
     private static HttpClient CreateClient()
@@ -90,13 +99,13 @@ internal static class AiClient
     /// <summary>
     /// Opens a pooled TCP+TLS connection to the provider ahead of the real request, so the
     /// handshake overlaps with the user's own think time instead of being charged to the wait.
-    /// Worth 30-200 ms on OpenRouter and 300-500 ms on PayPerQ. Sends no Authorization header and
+    /// Worth 30-200 ms on OpenRouter and 300-600 ms on PayPerQ. Sends no Authorization header and
     /// no payload: nothing that identifies the user leaves the machine, only a handshake to a host
     /// they have already chosen to use.
     /// </summary>
     internal static void Prewarm(AiProvider provider)
     {
-        if (Environment.TickCount64 - Volatile.Read(ref _lastContactTicks) < PrewarmMinGapMs) return;
+        if (Environment.TickCount64 - Volatile.Read(ref _lastContactTicks) < PrewarmMinGapMs(provider)) return;
         if (Interlocked.CompareExchange(ref _prewarmInFlight, 1, 0) != 0) return;
         _ = Task.Run(async () =>
         {
@@ -107,7 +116,7 @@ internal static class AiClient
                 using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cts.Token)
                     .ConfigureAwait(false);
                 // Draining the body is what returns the socket to the pool; without it the whole
-                // exercise is a no-op. Unauthenticated, so a 401 body is the expected answer.
+                // exercise is a no-op. Unauthenticated, and each endpoint answers with a few bytes.
                 _ = await response.Content.ReadAsByteArrayAsync(cts.Token).ConfigureAwait(false);
                 Volatile.Write(ref _lastContactTicks, Environment.TickCount64);
             }
@@ -128,11 +137,14 @@ internal static class AiClient
         // time and must not be handed a fresh full budget.
         long deadline = Environment.TickCount64 + req.TotalBudgetMs;
 
-        bool suppressReasoning = req.DisableReasoning && RouteFacts.IsReasoningControlKnownRejected(req.Model);
+        // The two providers share model slugs, and a fact learned on one says nothing about the
+        // other, so the provider is part of the key.
+        string routeKey = req.Provider.ToPref() + "|" + req.Model;
+        bool suppressReasoning = req.DisableReasoning && RouteFacts.IsReasoningControlKnownRejected(routeKey);
         bool zdrWanted = req.Provider == AiProvider.OpenRouter && req.UseZeroDataRetention;
         // A model whose ZDR route we already found missing would otherwise pay for a doomed
         // attempt on every single fix just to rediscover it.
-        bool zdrSuppressed = zdrWanted && RouteFacts.IsZdrKnownUnavailable(req.Model);
+        bool zdrSuppressed = zdrWanted && RouteFacts.IsZdrKnownUnavailable(routeKey);
         // Reported even when it comes from the cache rather than a live refusal, so the caller
         // knows about every affected request and not only the first one in 30 minutes.
         bool fellBack = zdrSuppressed;
@@ -148,7 +160,7 @@ internal static class AiClient
             // No zero-retention route. Retry once, but never down to "anything goes": the retry
             // still refuses every provider that keeps the text to train on (see
             // DeniesDataCollection), and fails rather than go further.
-            if (RouteFacts.IsZdrVerdictCacheable(e.StatusCode, e.ErrorBody)) RouteFacts.MarkZdrUnavailable(req.Model);
+            if (RouteFacts.IsZdrVerdictCacheable(e.StatusCode, e.ErrorBody)) RouteFacts.MarkZdrUnavailable(routeKey);
             Log.Info("No zero-data-retention route; retrying with data collection denied");
             fellBack = true;
             text = await AttemptWithReasoningFallback(false).ConfigureAwait(false);
@@ -167,7 +179,7 @@ internal static class AiClient
             catch (AiException e) when (ChatTuningApplies() && RouteFacts.IsReasoningControlRejected(e.StatusCode, e.ErrorBody))
             {
                 suppressReasoning = true;
-                RouteFacts.MarkReasoningControlRejected(req.Model);
+                RouteFacts.MarkReasoningControlRejected(routeKey);
                 return await WithRetries(zdr).ConfigureAwait(false);
             }
         }
@@ -282,12 +294,15 @@ internal static class AiClient
 
             if (!response.IsSuccessStatusCode)
             {
-                string errorBody = await ReadCappedAsync(response, MaxErrorBytes, attemptCts.Token).ConfigureAwait(false);
+                (string errorBody, _) = await ReadCappedAsync(response, MaxErrorBytes, attemptCts.Token).ConfigureAwait(false);
                 int status = (int)response.StatusCode;
                 throw new AiException("API error: " + status, status, ParseRetryAfterMs(response.Headers), errorBody);
             }
 
-            string payload = await ReadCappedAsync(response, MaxResponseBytes, attemptCts.Token).ConfigureAwait(false);
+            (string payload, bool tooLarge) = await ReadCappedAsync(response, MaxResponseBytes, attemptCts.Token).ConfigureAwait(false);
+            // Refused, not cut: a cut body does not parse, and three more requests would end the
+            // same way.
+            if (tooLarge) throw new AiException("The answer of the provider was too large.");
             return ParseContent(payload);
         }
         finally
@@ -512,25 +527,34 @@ internal static class AiClient
 
     private static AiException Unusable(string message) => new(message, AiStatus.UnusableResponse);
 
-    private static async Task<string> ReadCappedAsync(HttpResponseMessage response, int maxBytes, CancellationToken ct)
+    /// <summary>Reads at most maxBytes of the body. Truncated is true when the body had more.</summary>
+    private static async Task<(string Text, bool Truncated)> ReadCappedAsync(
+        HttpResponseMessage response, int maxBytes, CancellationToken ct)
     {
         try
         {
             await using Stream stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             byte[] buffer = new byte[Math.Min(maxBytes, 64 * 1024)];
             using var accumulated = new MemoryStream();
+            bool truncated = false;
             int read;
             while ((read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
             {
                 int room = maxBytes - (int)accumulated.Length;
-                if (room <= 0) break;
-                accumulated.Write(buffer, 0, Math.Min(read, room));
+                if (read > room)
+                {
+                    if (room > 0) accumulated.Write(buffer, 0, room);
+                    truncated = true;
+                    break;
+                }
+                accumulated.Write(buffer, 0, read);
             }
-            return System.Text.Encoding.UTF8.GetString(accumulated.GetBuffer(), 0, (int)accumulated.Length);
+            string text = System.Text.Encoding.UTF8.GetString(accumulated.GetBuffer(), 0, (int)accumulated.Length);
+            return (text, truncated);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            return string.Empty;
+            return (string.Empty, false);
         }
     }
 

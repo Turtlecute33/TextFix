@@ -44,11 +44,13 @@ internal static class AiProviderExtensions
 
     /// <summary>
     /// The URL used to open a pooled TLS connection ahead of a real request. Unauthenticated on
-    /// purpose: a pre-warm must never carry anything that identifies the user.
+    /// purpose: a pre-warm must never carry anything that identifies the user. Each one answers
+    /// with a few bytes. The model list of PayPerQ is public and 300 KB, and its HTTP/1.1
+    /// connection is busy until the last byte arrives, so that is not the URL to use.
     /// </summary>
     internal static string PrewarmEndpoint(this AiProvider provider) => provider switch
     {
-        AiProvider.PayPerQ => Endpoints.PayPerQModels,
+        AiProvider.PayPerQ => Endpoints.PayPerQRoot,
         _ => Endpoints.OpenRouterKey,
     };
 
@@ -70,7 +72,7 @@ internal static class Endpoints
     internal const string OpenRouterKey = OpenRouterApiBase + "/key";
     internal const string PayPerQApiBase = "https://api.ppq.ai";
     internal const string PayPerQChat = PayPerQApiBase + "/chat/completions";
-    internal const string PayPerQModels = PayPerQApiBase + "/v1/models";
+    internal const string PayPerQRoot = PayPerQApiBase + "/";
 }
 
 internal enum PricingTier
