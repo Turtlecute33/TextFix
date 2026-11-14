@@ -266,8 +266,9 @@ work". Both can be switched off if you want the agent completely silent.
   training (`data_collection: deny`), and TextFix tells you once per model. If no provider meets
   even that, the fix fails and says so; it never falls further. Turn off zero data retention to
   let your OpenRouter account settings decide instead.
-- **Reasoning off by default** on OpenRouter. Copy-editing does not benefit from a scratchpad, and
-  it costs seconds. PayPerQ offers no switch for it.
+- **Reasoning off by default** on OpenRouter and PayPerQ. Copy-editing does not benefit from a
+  scratchpad, and it costs seconds. Some models cannot turn reasoning off. For those, TextFix sends
+  the request again without the switch and remembers this for 30 minutes.
 - **Password fields are refused when the field reports itself as one.** On macOS that is
   `AXSecureTextField`, which native controls and password inputs in Safari and Chrome report. On
   Windows it is the password style, which only native controls show. Apps on macOS that do not

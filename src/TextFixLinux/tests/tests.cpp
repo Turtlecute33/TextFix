@@ -178,15 +178,17 @@ private slots:
         auto body = AiText::body("input", "Correct the text", Config::defaults());
         QCOMPARE(body.value("messages").toArray().size(), 2);
     }
-    void payPerQOmitsOpenRouterRoutingAndReasoning() {
+    void payPerQOmitsOpenRouterRoutingButTurnsReasoningOff() {
         auto config = Config::defaults();
         config.insert("provider", "payperq");
         config.insert("model", "custom");
         config.insert("customModel", "author/custom-model");
         const auto body = AiText::body("input", "prompt", config);
         QVERIFY(!body.contains("provider"));
-        QVERIFY(!body.contains("reasoning"));
+        QCOMPARE(body.value("reasoning").toObject().value("enabled").toBool(true), false);
         QCOMPARE(body.value("model").toString(), "author/custom-model");
+        config.insert("allowReasoning", true);
+        QVERIFY(!AiText::body("input", "prompt", config).contains("reasoning"));
     }
     void cleansWithoutDestroyingLanguageMarks() {
         QString error;

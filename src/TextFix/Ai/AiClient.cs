@@ -173,7 +173,7 @@ internal static class AiClient
         }
 
         bool ChatTuningApplies() =>
-            req.Provider == AiProvider.OpenRouter && req.DisableReasoning && !suppressReasoning;
+            req.DisableReasoning && !suppressReasoning;
 
         async Task<string> WithRetries(bool zdr)
         {

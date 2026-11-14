@@ -139,7 +139,7 @@ enum AiClient {
         let requestZdr = zdrWanted && !zdrSuppressed
 
         func chatTuningApplies() -> Bool {
-            req.provider == .openRouter && req.disableReasoning && !suppressReasoning
+            req.disableReasoning && !suppressReasoning
         }
 
         func withRetries(zdr: Bool) async throws -> String {

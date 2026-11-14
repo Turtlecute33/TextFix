@@ -64,7 +64,7 @@ QJsonObject AiText::body(const QString &text, const QString &prompt, const QJson
     // for training. It never goes below that.
     if (openRouter && config.value("zeroDataRetention").toBool(true))
         result.insert("provider", enforceZdr ? QJsonObject{{"zdr", true}} : QJsonObject{{"data_collection", "deny"}});
-    if (openRouter && disableReasoning && !config.value("allowReasoning").toBool())
+    if (disableReasoning && !config.value("allowReasoning").toBool())
         result.insert("reasoning", QJsonObject{{"enabled", false}});
     return result;
 }
@@ -209,7 +209,7 @@ void AiClient::start(const QString &text, const QString &prompt, const QJsonObje
     // A model that has no ZDR route would fail one attempt on each fix to learn the same thing.
     m_fellBack = m_zdrWanted && known(zdrUnavailable, m_model);
     m_zdr = m_zdrWanted && !m_fellBack;
-    m_reasoningOff = m_openRouter && !config.value("allowReasoning").toBool() && !known(reasoningRejected, m_model);
+    m_reasoningOff = !config.value("allowReasoning").toBool() && !known(reasoningRejected, m_model);
     m_attempt = 0;
     // One deadline for the full request. The retries and the ZDR downgrade do not start it again.
     m_deadline.start(qBound(5000, config.value("requestBudgetMs").toInt(90000), 300000));
