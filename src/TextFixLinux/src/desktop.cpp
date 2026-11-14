@@ -46,12 +46,20 @@ bool Desktop::setText(const QString &text) {
 bool Desktop::isTerminal(const Focus &focus) {
     static const QRegularExpression pattern(
         "\\b(kitty|alacritty|ghostty|foot|footclient|wezterm|gnome-terminal|ptyxis|kgx|org\\.gnome\\.Console|konsole"
-        "|xterm|urxvt|tilix|terminator|xfce4-terminal|lxterminal|qterminal|terminology|blackbox)\\b"
+        "|xterm|urxvt|tilix|terminator|xfce4-terminal|lxterminal|qterminal|terminology|blackbox"
+        "|mate-terminal|deepin-terminal|io\\.elementary\\.terminal|com\\.system76\\.CosmicTerm|cosmic-term|st"
+        "|rio|warp|tabby|hyper|sakura|guake|yakuake|tilda|contour|cool-retro-term|termite|termius)\\b"
         "|\\borg\\.omarchy\\.|\\bTUI\\.",
         QRegularExpression::CaseInsensitiveOption);
     return focus.terminal || pattern.match(focus.app).hasMatch();
 }
 
+// The Settings window of TextFix. A fix there would send a prompt or a model slug to the
+// provider and paste the answer into the window.
+bool Desktop::isOwnWindow(const Focus &focus) {
+    static const QRegularExpression pattern("\\btextfix\\b", QRegularExpression::CaseInsensitiveOption);
+    return pattern.match(focus.app).hasMatch();
+}
 LinuxDesktop::LinuxDesktop()
     : m_wayland(!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY") || qEnvironmentVariable("XDG_SESSION_TYPE") == "wayland"),
       m_hyprland(m_wayland && !qEnvironmentVariableIsEmpty("HYPRLAND_INSTANCE_SIGNATURE")) {
@@ -114,9 +122,24 @@ bool LinuxDesktop::shortcut(const Focus &target, const QString &key) {
     return !m_wayland && runTool("xdotool", {"key", "--clearmodifiers", plain ? key : "ctrl+" + key.toLower()}).ok;
 }
 
+// True when this process owns the clipboard: the user copied in the Settings window. Only the
+// GUI thread can answer a read of that data, and wl-paste would stop this thread while it waits
+// for the answer. Qt has the data in memory, so it is read from there.
+static bool ownsClipboard() {
+    const auto *clipboard = QGuiApplication::clipboard();
+    return clipboard && clipboard->ownsClipboard() && clipboard->mimeData();
+}
+
 ClipboardData LinuxDesktop::snapshot() {
     ClipboardData saved;
-    if (m_wayland) {
+    if (m_wayland && ownsClipboard()) {
+        const auto *mime = QGuiApplication::clipboard()->mimeData();
+        // One format, as in the wl-paste path below: wl-copy puts back one.
+        for (const auto &preferred : {QString("text/plain;charset=utf-8"), QString("text/plain"), QString("image/png")})
+            if (mime->hasFormat(preferred)) { saved.formats.insert(preferred, mime->data(preferred)); break; }
+        if (saved.formats.isEmpty() && !mime->formats().isEmpty())
+            saved.formats.insert(mime->formats().first(), mime->data(mime->formats().first()));
+    } else if (m_wayland) {
         const auto types = runTool("wl-paste", {"--list-types"});
         if (!types.ok) {
             // wl-paste exits nonzero both for an empty clipboard and a dead compositor. Only
@@ -143,7 +166,7 @@ ClipboardData LinuxDesktop::snapshot() {
 }
 
 QString LinuxDesktop::text(bool *ok) {
-    if (m_wayland) {
+    if (m_wayland && !ownsClipboard()) {
         const auto result = runTool("wl-paste", {"--no-newline", "--type", "text"});
         *ok = result.ok;
         return QString::fromUtf8(result.output);
@@ -165,7 +188,13 @@ bool LinuxDesktop::write(const ClipboardData &data) {
         return runTool("wl-copy", args, it.value()).ok;
     }
     auto *mime = new QMimeData;
-    for (auto it = data.formats.begin(); it != data.formats.end(); ++it) mime->setData(it.key(), it.value());
+    for (auto it = data.formats.begin(); it != data.formats.end(); ++it) {
+        mime->setData(it.key(), it.value());
+        // Qt offers the X11 targets UTF8_STRING, STRING and TEXT only for "text/plain". Older
+        // toolkits ask for those and would paste nothing.
+        if (it.key() == "text/plain;charset=utf-8" && !data.formats.contains("text/plain"))
+            mime->setText(QString::fromUtf8(it.value()));
+    }
     QGuiApplication::clipboard()->setMimeData(mime);
     return true;
 }

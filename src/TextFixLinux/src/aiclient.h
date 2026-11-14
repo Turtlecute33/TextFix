@@ -33,6 +33,9 @@ public:
     explicit AiClient(QObject *parent = nullptr, const QUrl &testEndpoint = {});
     void start(const QString &text, const QString &prompt, const QJsonObject &config, const QString &key);
     void cancel();
+    // Opens the connection to the provider before the request, so that the handshake runs while
+    // the text is read. It sends no request, no key and no text.
+    void prewarm(const QString &provider);
     // True when the last answer came from a route without zero data retention.
     bool fellBackFromZdr() const { return m_fellBack; }
     static void forgetRouteFacts();
@@ -47,7 +50,7 @@ private:
     QPointer<QNetworkReply> m_reply;
     QTimer m_deadline, m_retry;
     QJsonObject m_config;
-    QString m_key, m_text, m_prompt, m_model;
+    QString m_key, m_text, m_prompt, m_model, m_routeKey;
     QUrl m_testEndpoint;
     QByteArray m_response;
     int m_attempt = 0;

@@ -282,7 +282,8 @@ work". Both can be switched off if you want the agent completely silent.
   handshake to your provider when the agent starts, to warm the connection. It carries no payload
   and no key, but it does mean your provider sees the machine at sign-in even on a day you never
   use TextFix. Set `prewarmOnStartup` to `false` to stop it; the only cost is one handshake on the
-  first fix of the session. Linux does not prewarm at startup.
+  first fix of the session. Linux does not prewarm at startup. After a hotkey press, each agent
+  opens the connection while it reads your text, also with no payload and no key.
 - **With nothing selected, the hotkey takes what Select All copies.** In a text box that is the
   whole field. Outside a text box it can be a whole web page or document, and TextFix sends it to
   your provider if it is not longer than `maxInputLength`. To stop this, untick **Whole field when

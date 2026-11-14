@@ -19,9 +19,20 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSocketNotifier>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <csignal>
 #include <memory>
+#include <unistd.h>
+
+// A signal handler can do very little safely. This one writes a byte to a pipe.
+static int quitPipe[2] = {-1, -1};
+static void quitOnSignal(int) {
+    const char byte = 1;
+    const auto written = ::write(quitPipe[1], &byte, 1);
+    (void)written;
+}
 
 static const char help[] =
     "TextFix - fix text in place on Linux\n"
@@ -58,19 +69,25 @@ int main(int argc, char *argv[]) {
     const auto session = QCryptographicHash::hash((qEnvironmentVariable("WAYLAND_DISPLAY") + ":" + qEnvironmentVariable("DISPLAY")).toUtf8(), QCryptographicHash::Sha256).toHex().left(12);
     const QString socketName = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + "/textfix-" + session + ".sock";
     const QByteArray request = (command + (arguments.contains("--rewrite") ? " --rewrite" : "") + "\n").toUtf8();
+    // Unanswered: the agent has the command but is busy (a keyring prompt, a slow clipboard
+    // owner). The command must not go a second time, or one key press becomes two.
+    enum class Sent { No, Yes, Unanswered };
     auto forward = [&] {
         QLocalSocket socket;
         socket.connectToServer(socketName);
-        if (!socket.waitForConnected(500)) return false;
+        if (!socket.waitForConnected(500)) return Sent::No;
         socket.write(request);
         socket.waitForBytesWritten(500);
-        return socket.waitForReadyRead(2000) && socket.readLine().trimmed() == "ok";
+        return socket.waitForReadyRead(2000) && socket.readLine().trimmed() == "ok" ? Sent::Yes : Sent::Unanswered;
     };
+    const char *busy = "TextFix is busy and did not answer. The command was sent one time.\n";
     if (command != "doctor" && command != "filter") {
         // The usual case: a shortcut starts this program while the agent runs. Pass the command
         // on without a display connection, which is most of the start time of a Qt GUI program.
         QCoreApplication client(argc, argv);
-        if (forward()) return 0;
+        const Sent sent = forward();
+        if (sent == Sent::Yes) return 0;
+        if (sent == Sent::Unanswered) { QTextStream(stderr) << busy; return 1; }
         if (command == "cancel" || command == "quit") return 0;
     }
     QGuiApplication app(argc, argv);
@@ -131,8 +148,9 @@ int main(int argc, char *argv[]) {
 
     QLockFile lock(socketName + ".lock");
     if (!lock.tryLock(0)) {
-        if (forward()) return 0;
-        QTextStream(stderr) << "TextFix is starting or its session socket is unavailable. Try again.\n";
+        const Sent sent = forward();
+        if (sent == Sent::Yes) return 0;
+        QTextStream(stderr) << (sent == Sent::Unanswered ? busy : "TextFix is starting or its session socket is unavailable. Try again.\n");
         return 1;
     }
     QLocalServer::removeServer(socketName);
@@ -181,8 +199,12 @@ int main(int argc, char *argv[]) {
         if (request == "quit") { backend.cancel(); app.quit(); }
         else if (request == "cancel") backend.cancel();
         else if (request == "settings") openSettings();
-        else if (request == "fix" || request == "rewrite") backend.start(request == "rewrite" ? 1 : 0);
-        else if (request == "clipboard" || request == "clipboard --rewrite") backend.start(request.endsWith("--rewrite") ? 1 : 0, true);
+        else if (request == "fix" || request == "rewrite" || request == "clipboard" || request == "clipboard --rewrite") {
+            // Asked each time: a pill that lost its connection gives its place to the notification.
+            backend.setAnimationAvailable(pill.available());
+            if (request.startsWith("clipboard")) backend.start(request.endsWith("--rewrite") ? 1 : 0, true);
+            else backend.start(request == "rewrite" ? 1 : 0);
+        }
     };
     QObject::connect(&server, &QLocalServer::newConnection, &app, [&] {
         while (auto *socket = server.nextPendingConnection()) {
@@ -201,6 +223,17 @@ int main(int argc, char *argv[]) {
             read();
         }
     });
+    // A logout or a kill ends the agent with a signal. Without this the clipboard keeps the probe
+    // marker or the fixed text, and a restore that waits on its timer is lost. The handler only
+    // writes one byte; the event loop reads it and quits in the usual way.
+    if (::pipe(quitPipe) == 0) {
+        auto *notifier = new QSocketNotifier(quitPipe[0], QSocketNotifier::Read, &app);
+        QObject::connect(notifier, &QSocketNotifier::activated, &app, [&] {
+            char byte;
+            if (::read(quitPipe[0], &byte, 1) > 0) app.quit();
+        });
+        for (int signal : {SIGTERM, SIGINT, SIGHUP}) std::signal(signal, quitOnSignal);
+    }
     QTimer::singleShot(0, &app, [&] { dispatch(QString::fromUtf8(request).trimmed()); });
     return app.exec();
 }

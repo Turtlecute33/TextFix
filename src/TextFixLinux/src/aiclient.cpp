@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
+#include <QSslConfiguration>
 #include <QUuid>
 #include <initializer_list>
 
@@ -15,15 +16,16 @@ const qsizetype maxResponseBytes = 1000000;
 
 // Routing facts that cost a failed request to learn. They stay for 30 minutes only: a ZDR
 // route that was down comes back, and a ~author/model-latest alias can point to a different
-// endpoint tomorrow.
+// endpoint tomorrow. The key is the provider and the model: the two providers share model
+// slugs, and a fact about one says nothing about the other.
 const qint64 routeFactLifeMs = 30 * 60 * 1000;
 QHash<QString, qint64> zdrUnavailable, reasoningRejected;
 
-bool known(QHash<QString, qint64> &facts, const QString &model) {
-    const auto it = facts.constFind(model);
+bool known(QHash<QString, qint64> &facts, const QString &key) {
+    const auto it = facts.constFind(key);
     if (it == facts.constEnd()) return false;
     if (QDateTime::currentMSecsSinceEpoch() - it.value() < routeFactLifeMs) return true;
-    facts.remove(model);
+    facts.remove(key);
     return false;
 }
 
@@ -196,6 +198,19 @@ void AiClient::forgetRouteFacts() {
     reasoningRejected.clear();
 }
 
+void AiClient::prewarm(const QString &provider) {
+    // A test endpoint is a local server. The tests stay offline.
+    if (!m_testEndpoint.isEmpty()) return;
+    const QString host = provider == "openrouter" ? "openrouter.ai" : provider == "payperq" ? "api.ppq.ai" : QString();
+    if (host.isEmpty()) return;
+    // The protocol list is necessary. A request offers HTTP/2, and Qt gives it only a connection
+    // that was opened with the same offer. Measured with Qt 6.12: without the list the request
+    // makes its own handshake (PayPerQ about 650 ms), with it the request takes about 120 ms.
+    auto ssl = QSslConfiguration::defaultConfiguration();
+    ssl.setAllowedNextProtocols({QSslConfiguration::ALPNProtocolHTTP2, QSslConfiguration::NextProtocolHttp1_1});
+    m_network.connectToHostEncrypted(host, 443, ssl);
+}
+
 void AiClient::start(const QString &text, const QString &prompt, const QJsonObject &config, const QString &key) {
     cancel();
     m_active = true;
@@ -205,11 +220,12 @@ void AiClient::start(const QString &text, const QString &prompt, const QJsonObje
     m_prompt = prompt;
     m_model = AiText::resolveModel(config);
     m_openRouter = config.value("provider").toString() == "openrouter";
+    m_routeKey = config.value("provider").toString() + '|' + m_model;
     m_zdrWanted = m_openRouter && config.value("zeroDataRetention").toBool(true);
     // A model that has no ZDR route would fail one attempt on each fix to learn the same thing.
-    m_fellBack = m_zdrWanted && known(zdrUnavailable, m_model);
+    m_fellBack = m_zdrWanted && known(zdrUnavailable, m_routeKey);
     m_zdr = m_zdrWanted && !m_fellBack;
-    m_reasoningOff = !config.value("allowReasoning").toBool() && !known(reasoningRejected, m_model);
+    m_reasoningOff = !config.value("allowReasoning").toBool() && !known(reasoningRejected, m_routeKey);
     m_attempt = 0;
     // One deadline for the full request. The retries and the ZDR downgrade do not start it again.
     m_deadline.start(qBound(5000, config.value("requestBudgetMs").toInt(90000), 300000));
@@ -287,7 +303,7 @@ void AiClient::handle(QNetworkReply *reply) {
         // No zero-retention route. Ask one time more without it. That request still refuses
         // each provider that keeps the text for training (see AiText::body).
         if (AiText::zdrVerdictCacheable(status, response))
-            zdrUnavailable.insert(m_model, QDateTime::currentMSecsSinceEpoch());
+            zdrUnavailable.insert(m_routeKey, QDateTime::currentMSecsSinceEpoch());
         m_zdr = false;
         m_fellBack = true;
         m_attempt = 0;
@@ -301,7 +317,7 @@ void AiClient::handle(QNetworkReply *reply) {
         return;
     }
     if (m_reasoningOff && AiText::reasoningControlRejected(status, response)) {
-        reasoningRejected.insert(m_model, QDateTime::currentMSecsSinceEpoch());
+        reasoningRejected.insert(m_routeKey, QDateTime::currentMSecsSinceEpoch());
         m_reasoningOff = false;
         m_attempt = 0;
         attempt();

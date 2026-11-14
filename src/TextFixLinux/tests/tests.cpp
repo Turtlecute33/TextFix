@@ -82,6 +82,7 @@ public:
 
 class Tests : public QObject {
     Q_OBJECT
+    QTemporaryDir m_configHome;
     static void write(const QString &path, const QByteArray &data) {
         QSaveFile file(path);
         QVERIFY(file.open(QIODevice::WriteOnly));
@@ -96,7 +97,13 @@ class Tests : public QObject {
         QVERIFY(Config::save(directory, config, &error));
     }
 private slots:
-    void initTestCase() { QQuickStyle::setStyle("Material"); }
+    void initTestCase() {
+        QQuickStyle::setStyle("Material");
+        // Backend::save writes or removes the login entry in the config location of the user.
+        // The tests must not touch the real one.
+        QVERIFY(m_configHome.isValid());
+        qputenv("XDG_CONFIG_HOME", m_configHome.path().toUtf8());
+    }
     void init() { AiClient::forgetRouteFacts(); }
     void configMergesActionsAndPreservesUnknownKeys() {
         QTemporaryDir dir;
@@ -127,7 +134,9 @@ private slots:
         write(dir.filePath("config.json"), "{bad json");
         qputenv("TEXTFIX_API_KEY", "test-key");
         FakeDesktop desktop;
-        Backend backend(&desktop, dir.path());
+        // Dry run is off here, so the backend gets a local endpoint: nothing goes to a real host.
+        FakeProvider provider;
+        Backend backend(&desktop, dir.path(), nullptr, provider.url());
         QStringList errors;
         connect(&backend, &Backend::notice, this, [&](const QString &message, int kind) { if (kind == Backend::Error) errors.append(message); });
         backend.start(0);
@@ -215,6 +224,75 @@ private slots:
         QVERIFY(AiText::retryable(status));
         QVERIFY(!AiText::retryable(401));
     }
+    void aRouteFactOfOneProviderDoesNotApplyToTheOther() {
+        FakeProvider provider;
+        bool refuse = true;
+        provider.script = [&](int, const QJsonObject &body) -> FakeProvider::Answer {
+            if (refuse && body.contains("reasoning")) return {"400 Bad Request", R"({"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled."}})", {}};
+            return {"200 OK", FakeProvider::fixed(), {}};
+        };
+        auto payPerQ = Config::defaults();
+        payPerQ.insert("provider", "payperq");
+        AiClient ai(nullptr, provider.url());
+        QSignalSpy results(&ai, &AiClient::finished);
+        ai.start("rough", "prompt", payPerQ, "test-key");
+        QTRY_COMPARE(results.size(), 1);
+        QCOMPARE(provider.requests.size(), 2);
+        QVERIFY(!provider.requests[1].contains("reasoning"));
+        // PayPerQ remembers: the next request there has no switch.
+        ai.start("rough", "prompt", payPerQ, "test-key");
+        QTRY_COMPARE(results.size(), 2);
+        QCOMPARE(provider.requests.size(), 3);
+        QVERIFY(!provider.requests[2].contains("reasoning"));
+        // The same slug on OpenRouter still gets the switch.
+        refuse = false;
+        ai.start("rough", "prompt", Config::defaults(), "test-key");
+        QTRY_COMPARE(results.size(), 3);
+        QCOMPARE(provider.requests.size(), 4);
+        QCOMPARE(provider.requests[3].value("reasoning").toObject().value("enabled").toBool(true), false);
+    }
+    void settingsReloadShowsAHandEditedFile() {
+        QTemporaryDir dir;
+        configure(dir.path());
+        FakeDesktop desktop;
+        Backend backend(&desktop, dir.path());
+        auto config = QJsonObject::fromVariantMap(backend.settings());
+        config.insert("clipboardRestoreDelayMs", 800);
+        QString error;
+        QVERIFY(Config::save(dir.path(), config, &error));
+        QCOMPARE(backend.settings().value("clipboardRestoreDelayMs").toInt(), 300);
+        backend.reload();
+        QCOMPARE(backend.settings().value("clipboardRestoreDelayMs").toInt(), 800);
+    }
+    void aPressDuringThePasteDoesNotStartASecondFix() {
+        QTemporaryDir dir;
+        configure(dir.path());
+        FakeDesktop desktop;
+        Backend backend(&desktop, dir.path());
+        backend.start(0);
+        QTRY_VERIFY(!backend.busy());
+        QCOMPARE(desktop.pasted, "ROUGH TEXT");
+        const auto keys = desktop.keys;
+        // The target can still be pasting, and the clipboard restore still waits on its timer.
+        backend.start(0);
+        QVERIFY(!backend.busy());
+        QCOMPARE(desktop.keys, keys);
+        QCOMPARE(desktop.clipboard, "ROUGH TEXT");
+        QTest::qWait(Backend::pasteSettleMs + 20);
+        QCOMPARE(desktop.clipboard, "original clipboard");
+        backend.start(0);
+        QVERIFY(backend.busy());
+        backend.cancel();
+    }
+    void ownSettingsWindowIsRefused() {
+        QVERIFY(Desktop::isOwnWindow({"1", "textfix"}));
+        QVERIFY(Desktop::isOwnWindow({"1", "WM_CLASS(STRING) = \"textfix\", \"textfix\""}));
+        QVERIFY(!Desktop::isOwnWindow({"1", "org.mozilla.firefox"}));
+        QVERIFY(Desktop::isTerminal({"1", "st-256color"}));
+        QVERIFY(Desktop::isTerminal({"1", "dev.warp.Warp"}));
+        QVERIFY(!Desktop::isTerminal({"1", "WM_CLASS(STRING) = \"code\", \"Code\""}));
+        QVERIFY(!Desktop::isTerminal({"1", "org.mozilla.firefox"}));
+    }
     void fixesSelectionAndRestoresClipboard() {
         QTemporaryDir dir;
         configure(dir.path());
@@ -293,6 +371,7 @@ private slots:
         QTRY_VERIFY(!backend.busy());
         QCOMPARE(desktop.pasted, "ROUGH TEXT");
         desktop.active = Focus{"w", "kitty"};
+        QTest::qWait(Backend::pasteSettleMs + 20);
         backend.start(0);
         QCOMPARE(shown.size(), 0);
         QVERIFY(cleared.size() >= 2);
@@ -327,6 +406,7 @@ private slots:
         QVERIFY(pillGone.size() >= 1);
         // Without a place for the pill, the same setting shows the notification.
         backend.setAnimationAvailable(false);
+        QTest::qWait(Backend::pasteSettleMs + 20);
         backend.start(0);
         QTRY_VERIFY(!backend.busy());
         QCOMPARE(pill.size(), 2);

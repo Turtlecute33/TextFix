@@ -29,6 +29,11 @@ if $uninstall; then
     echo "Removed TextFix from $destdir$prefix."
     exit 0
 fi
+# An agent of the old version that still runs would get the commands of the new client until
+# the next login. Stop it. The next shortcut starts the new one.
+if [[ -z "$destdir" && -x "$prefix/bin/textfix" ]]; then
+    "$prefix/bin/textfix" quit 2>/dev/null || true
+fi
 install -Dm755 "$root/textfix" "$destdir$prefix/bin/textfix"
 install -Dm644 "$root/textfix.desktop" "$destdir$prefix/share/applications/textfix.desktop"
 install -Dm644 "$root/textfix.svg" "$destdir$prefix/share/icons/hicolor/scalable/apps/textfix.svg"

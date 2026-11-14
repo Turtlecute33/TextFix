@@ -67,7 +67,9 @@ ApplicationWindow {
         apiKey.clear()
         dirty = false
     }
-    function open() { theme.reload(); if (!dirty) load(); show(); raise(); requestActivate() }
+    // The window shows config.json as it is now. If not, Save writes old values over the keys
+    // that the user changed in the file.
+    function open() { theme.reload(); if (!dirty) { backend.reload(); load() } show(); raise(); requestActivate() }
     function save() {
         // Start from the saved settings, so that the keys this window does not show stay.
         var next = JSON.parse(JSON.stringify(backend.settings))
@@ -191,10 +193,9 @@ ApplicationWindow {
                 CheckBox {
                     id: reasoning
                     text: qsTr("Let the model reason before answering (slower)")
-                    enabled: win.providerSlug === "openrouter"
                     onToggled: win.dirty = true
                 }
-                Hint { text: qsTr("With zero data retention on, TextFix never uses a provider that keeps your text for training. PayPerQ has no switch for these two options.") }
+                Hint { text: qsTr("With zero data retention on, TextFix never uses a provider that keeps your text for training. PayPerQ has no switch for zero data retention.") }
             }
         }
 

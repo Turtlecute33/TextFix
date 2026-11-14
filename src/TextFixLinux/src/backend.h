@@ -16,7 +16,10 @@ public:
     // Progress: a request is active. Done: it ended and there is nothing to tell.
     // Info and Error: it ended with a message.
     enum Notice { Progress, Done, Info, Error };
-    explicit Backend(Desktop *desktop, const QString &directory = {}, QObject *parent = nullptr);
+    // The test endpoint is a local server that plays the provider. With it, nothing goes to
+    // the real hosts.
+    explicit Backend(Desktop *desktop, const QString &directory = {}, QObject *parent = nullptr,
+                     const QUrl &testEndpoint = {});
     ~Backend() override;
     QVariantMap settings() const { return m_config.toVariantMap(); }
     QString status() const { return m_status; }
@@ -25,6 +28,8 @@ public:
     Q_INVOKABLE bool save(const QVariantMap &values, const QString &key, bool autostart);
     Q_INVOKABLE bool autostart() const;
     Q_INVOKABLE void cancel();
+    // Reads config.json again, so that the Settings window shows what the file has now.
+    Q_INVOKABLE void reload();
     Q_INVOKABLE QVariantList models(const QString &provider) const;
     Q_INVOKABLE QString defaultPrompt(int action) const;
     void retranslate();
@@ -32,6 +37,8 @@ public:
     void setAnimationAvailable(bool available) { m_animation = available; }
     void start(int action, bool clipboardOnly = false);
     void flushRestore();
+    // A shortcut in this time after a paste is not a new fix.
+    static constexpr int pasteSettleMs = 300;
 signals:
     void changed();
     void settingsChanged();
@@ -58,7 +65,7 @@ private:
     QJsonObject m_config, m_action;
     AiClient m_ai;
     QTimer m_probe, m_restore;
-    QElapsedTimer m_copyWait;
+    QElapsedTimer m_copyWait, m_sincePaste;
     Focus m_focus;
     ClipboardData m_saved, m_pending;
     QString m_marker, m_clipboardToken, m_input, m_prompt, m_key;

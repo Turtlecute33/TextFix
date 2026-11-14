@@ -9,8 +9,9 @@
 #include <QStandardPaths>
 #include <QUuid>
 
-Backend::Backend(Desktop *desktop, const QString &directory, QObject *parent)
-    : QObject(parent), m_desktop(desktop), m_directory(directory.isEmpty() ? Config::directory() : directory) {
+Backend::Backend(Desktop *desktop, const QString &directory, QObject *parent, const QUrl &testEndpoint)
+    : QObject(parent), m_desktop(desktop), m_directory(directory.isEmpty() ? Config::directory() : directory),
+      m_ai(nullptr, testEndpoint) {
     m_config = Config::load(m_directory, &m_loadError);
     m_readyStatus = tr("Ready");
     m_status = m_loadError.isEmpty() ? m_readyStatus : m_loadError;
@@ -112,8 +113,21 @@ bool Backend::save(const QVariantMap &values, const QString &key, bool startAtLo
     return true;
 }
 
+void Backend::reload() {
+    if (m_busy) return;
+    QString error;
+    m_config = Config::load(m_directory, &error);
+    if (error != m_loadError) m_loadWarned = false;
+    m_loadError = error;
+    emit settingsChanged();
+}
+
 void Backend::start(int action, bool clipboardOnly) {
     if (m_busy) { cancel(); return; }
+    // The paste of the last fix is still in progress: the target reads the clipboard in this
+    // time. A press now is most often a cancel that came late. A new capture here would restore
+    // the clipboard early and send Ctrl+C into an application that is still pasting.
+    if (m_sincePaste.isValid() && m_sincePaste.elapsed() < pasteSettleMs) return;
     flushRestore();
     QString error;
     // A config.json with an error does not stop the fix. This request uses the default
@@ -132,6 +146,7 @@ void Backend::start(int action, bool clipboardOnly) {
     if (!clipboardOnly) {
         focus = m_desktop->focus();
         if (focus.id.isEmpty()) { fail(tr("No focused window. Nothing was changed.")); return; }
+        if (Desktop::isOwnWindow(focus)) { fail(tr("Switch to the application that has your text first.")); return; }
         if (Desktop::isTerminal(focus)) {
             fail(tr("TextFix does not work in terminal windows. Copy the text, then run textfix clipboard.")); return;
         }
@@ -142,6 +157,8 @@ void Backend::start(int action, bool clipboardOnly) {
         if (provider != "openrouter" && provider != "payperq") { fail(tr("Choose a supported provider.")); return; }
         m_key = Config::secret(provider, &error);
         if (m_key.isEmpty()) { fail(error.isEmpty() ? tr("Add your API key in Settings.") : error); return; }
+        // The request is sure from here. The handshake runs while the clipboard is read.
+        m_ai.prewarm(provider);
     }
     ++m_generation;
     m_busy = true;
@@ -258,6 +275,7 @@ void Backend::completed(const QString &answer, const QString &error) {
     m_busy = false;
     m_whole = false;
     m_input.clear();
+    if (!m_clipboardOnly) m_sincePaste.start();
     if (!m_clipboardOnly && m_config.value("restoreClipboard").toBool(true)) {
         m_pending = restoreTo;
         m_restore.start(qBound(100, m_config.value("clipboardRestoreDelayMs").toInt(300), 5000));

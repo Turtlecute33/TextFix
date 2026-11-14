@@ -26,6 +26,7 @@ public:
     virtual bool write(const ClipboardData &data) = 0;
     virtual bool setText(const QString &text);
     static bool isTerminal(const Focus &focus);
+    static bool isOwnWindow(const Focus &focus);
 };
 
 class LinuxDesktop : public Desktop {
