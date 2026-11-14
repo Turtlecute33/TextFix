@@ -91,28 +91,24 @@ final class ProgressPill {
     // ---- the panel ----
 
     private func ensurePanel() -> NSPanel {
-        if let panel { return panel }
+        if let panel {
+            // macOS can take a panel that joins all spaces out of some of them, and it does not
+            // put it back: seen on macOS 27, where the pill stayed on two full-screen spaces and
+            // was ordered in, but never drawn, on the desktop. Setting the collection behaviour
+            // again does not repair it. A new window joins every space, so the views move to one.
+            guard !visible, !panel.isOnActiveSpace, let content = panel.contentView else { return panel }
+            Log.debug("Progress pill was not on the active space; moved it to a new window")
+            panel.orderOut(nil)
+            panel.contentView = NSView()
+            let fresh = makeWindow(size: panel.frame.size)
+            fresh.contentView = content
+            self.panel = fresh
+            return fresh
+        }
 
         let margin = PillScene.margin
         let size = NSSize(width: PillScene.width + margin * 2, height: PillScene.height + margin * 2)
-        let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.ignoresMouseEvents = true  // never intercept a click
-        panel.level = .statusBar
-        panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-        panel.animationBehavior = .none
-        // The pill is decoration for a state the menu bar item also reports, and it is in nobody's
-        // focus order. Keeping it out of the accessibility tree stops VoiceOver announcing an
-        // unlabelled window every time a fix starts.
-        panel.setAccessibilityElement(false)
+        let panel = makeWindow(size: size)
 
         let content = NSView(frame: NSRect(origin: .zero, size: size))
         content.wantsLayer = true
@@ -137,6 +133,28 @@ final class ProgressPill {
         }
         self.panel = panel
         self.stage = stage
+        return panel
+    }
+
+    private func makeWindow(size: NSSize) -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true  // never intercept a click
+        panel.level = .statusBar
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        panel.animationBehavior = .none
+        // The pill is decoration for a state the menu bar item also reports, and it is in nobody's
+        // focus order. Keeping it out of the accessibility tree stops VoiceOver announcing an
+        // unlabelled window every time a fix starts.
+        panel.setAccessibilityElement(false)
         return panel
     }
 
