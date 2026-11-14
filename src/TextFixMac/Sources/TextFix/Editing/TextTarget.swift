@@ -74,6 +74,9 @@ struct CaptureOptions {
     /// caller's limit, so an oversized read is recognisably over it without being materialised in
     /// full on the main thread.
     let maxUTF16: Int
+    /// False when no indicator is shown at the caret. The rectangle costs up to five
+    /// Accessibility round trips, so it is not read for nothing.
+    let needsCaretRect: Bool
 }
 
 enum CaptureResult {
@@ -141,22 +144,35 @@ enum TextTarget {
             return .failed("That looks like a password field, so nothing was sent.")
         }
 
-        onTargetResolved(element.flatMap {
-            caretRect(element: $0, range: Ax.range($0, kAXSelectedTextRangeAttribute))
-        })
+        // Read one time. The capture paths below use the same range and the same rectangle.
+        let selectedRange = element.flatMap { Ax.range($0, kAXSelectedTextRangeAttribute) }
+        let caret = options.needsCaretRect
+            ? element.flatMap { caretRect(element: $0, range: selectedRange) }
+            : nil
+        onTargetResolved(caret)
 
         // Fast path: ask the element directly. It borrows nothing, so it snapshots nothing: the
         // replace takes its own snapshot just before it pastes, which also means a copy the user
         // makes while the request is out is what they get back.
         if options.useAccessibilityRead, let element,
-           let capture = captureViaAccessibility(element: element, pid: pid, options: options) {
+           let capture = captureViaAccessibility(
+               element: element, pid: pid, options: options, selectedRange: selectedRange, caret: caret) {
             return .captured(capture)
         }
 
         // Taken before the probe overwrites the pasteboard. This path cannot work without
         // borrowing it.
         let saved = options.takeSnapshot ? PasteboardBridge.snapshot() : nil
-        return capturePasteboard(element: element, pid: pid, options: options, saved: saved)
+        return capturePasteboard(element: element, pid: pid, options: options, saved: saved, caret: caret)
+    }
+
+    /// True when the app and the element of a capture still have the focus. Keys that TextFix
+    /// sends go to the focus, so they are sent only when this is true.
+    static func stillFocused(pid: pid_t, element: AXUIElement?) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+        guard let element else { return true }
+        guard let current = focusedElement() else { return false }
+        return CFEqual(current, element)
     }
 
     /// Terminal emulators, by bundle identifier.
@@ -167,19 +183,18 @@ enum TextTarget {
     ]
 
     private static func captureViaAccessibility(
-        element: AXUIElement, pid: pid_t, options: CaptureOptions
+        element: AXUIElement, pid: pid_t, options: CaptureOptions, selectedRange: CFRange?, caret: CGRect?
     ) -> TextCapture? {
         // An element that answers neither of these is not a text control we can work with, and
         // falling through to the pasteboard probe is the right answer for it.
         let selected = Ax.string(element, kAXSelectedTextAttribute)
-        let selectedRange = Ax.range(element, kAXSelectedTextRangeAttribute)
 
         if let selected, !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Log.debug("AX read: \(selected.count) selected characters")
             return TextCapture(
                 text: selected, mode: .selection, source: .accessibility, element: element,
                 appPid: pid, fullRange: selectedRange, saved: nil,
-                caretRect: caretRect(element: element, range: selectedRange))
+                caretRect: caret)
         }
 
         guard options.allowSelectAll else { return nil }
@@ -193,18 +208,23 @@ enum TextTarget {
         return TextCapture(
             text: whole, mode: .wholeText, source: .accessibility, element: element,
             appPid: pid, fullRange: CFRange(location: 0, length: length), saved: nil,
-            caretRect: caretRect(element: element, range: selectedRange))
+            caretRect: caret)
     }
 
     private static func capturePasteboard(
-        element: AXUIElement?, pid: pid_t, options: CaptureOptions, saved: PasteboardSnapshot?
+        element: AXUIElement?, pid: pid_t, options: CaptureOptions, saved: PasteboardSnapshot?, caret: CGRect?
     ) -> CaptureResult {
         var probeMarker: String?
+        // True after Cmd+A went out. A failure after that must not leave the field selected.
+        var selectedAll = false
 
         // Every failure below happens after the pasteboard has been overwritten with a probe
         // marker, so failing has to put the user's pasteboard back. Nothing else in the pipeline
         // knows a capture was in progress, so the cleanup belongs here.
         func cleanup(_ message: String) -> CaptureResult {
+            if selectedAll, stillFocused(pid: pid, element: element) {
+                Keystrokes.collapseSelection()
+            }
             if let saved {
                 PasteboardBridge.restoreOrClear(saved)
             } else if let probeMarker,
@@ -255,6 +275,7 @@ enum TextTarget {
             // pre-selection state.
             func readWholeField(settleMs: Int, chordDelayMs: Int?) -> String? {
                 guard Keystrokes.sendCommandChord("a", eventDelayMsOverride: chordDelayMs) else { return nil }
+                selectedAll = true
                 Keystrokes.sleep(ms: settleMs)
 
                 let nextMarker = PasteboardBridge.newProbeMarker()
@@ -300,8 +321,7 @@ enum TextTarget {
 
         return .captured(TextCapture(
             text: captured, mode: mode, source: .pasteboard, element: element, appPid: pid,
-            fullRange: nil, saved: saved,
-            caretRect: element.flatMap { caretRect(element: $0, range: Ax.range($0, kAXSelectedTextRangeAttribute)) }))
+            fullRange: nil, saved: saved, caretRect: caret))
     }
 
     // ---- replace ----

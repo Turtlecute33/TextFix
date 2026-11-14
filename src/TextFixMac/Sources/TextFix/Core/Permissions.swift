@@ -36,6 +36,10 @@ enum Permissions {
         isShowingPrompt = true
         defer { isShowingPrompt = false }
 
+        // The alert makes TextFix the active app. After "Later" the app that was in front gets
+        // the focus back, or the keys of the user go nowhere until they click.
+        let front = NSWorkspace.shared.frontmostApplication
+        let previous = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
@@ -53,6 +57,8 @@ enum Permissions {
             // then take the user to the pane where they flip the switch.
             requestWithSystemPrompt()
             openAccessibilitySettings()
+        } else if let previous, !previous.isTerminated {
+            previous.activate(options: [])
         }
     }
 

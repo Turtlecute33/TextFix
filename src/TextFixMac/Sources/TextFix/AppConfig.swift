@@ -392,7 +392,10 @@ final class AppConfig: Codable {
         }
     }
 
-    func save() {
+    /// False when the file could not be written. The caller tells the user: the session has the
+    /// new values, and the next launch would not.
+    @discardableResult
+    func save() -> Bool {
         do {
             try FileManager.default.createDirectory(at: AppConfig.directory, withIntermediateDirectories: true)
             if loadFailed, FileManager.default.fileExists(atPath: AppConfig.fileURL.path) {
@@ -409,8 +412,10 @@ final class AppConfig: Codable {
             // `.atomic` is write-then-replace, so a crash mid-write cannot leave a truncated
             // config behind.
             try encoder.encode(self).write(to: AppConfig.fileURL, options: .atomic)
+            return true
         } catch {
             Log.warn("Could not save config.json: \(type(of: error))")
+            return false
         }
     }
 

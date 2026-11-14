@@ -30,6 +30,9 @@ final class FixService {
     private var prompt = ""
     private var pendingRestore: PasteboardSnapshot?
     private var pendingRestoreWork: DispatchWorkItem?
+    /// The change count just after the paste, and the text of the paste. A restore that finds
+    /// something different does not write: the user copied in the delay.
+    private var pendingPaste: (count: Int, text: String)?
 
     /// True while an indicator is on screen, so every exit path can take it down again.
     private var indicatorShown = false
@@ -106,7 +109,8 @@ final class FixService {
             // One code unit past the limit is all that is ever worth reading: the check below
             // rejects anything that long, and the cap is what stops a 200 MB pasteboard being
             // turned into a String on the main thread just to discover it was never going to fit.
-            maxUTF16: config.maxInputLength + 1)
+            maxUTF16: config.maxInputLength + 1,
+            needsCaretRect: config.indicatorValue == .animation)
 
         let captured: TextCapture
         // Feedback goes up as soon as the target is known, rather than after the capture. The
@@ -291,7 +295,9 @@ final class FixService {
             if let restoreTo, restoreTo.changeCount != PasteboardBridge.changeCount {
                 // The paste needs the pasteboard to stay put for a moment: some hosts read it
                 // asynchronously after Cmd+V returns.
-                schedulePasteboardRestore(restoreTo, afterMs: config.pasteboardRestoreDelayMs)
+                schedulePasteboardRestore(
+                    restoreTo, afterMs: config.pasteboardRestoreDelayMs,
+                    paste: (PasteboardBridge.changeCount, proposed))
                 if !restoreTo.complete {
                     tell(
                         "Clipboard partly restored",
@@ -318,9 +324,12 @@ final class FixService {
 
         case .blocked:
             restorePasteboardNow(restoreTo)
-            Permissions.promptForAccessibility()
+            // This code runs in a block of the main queue. An alert that runs from it stops that
+            // queue until the alert closes, so the alert starts from the run loop.
+            RunLoop.main.perform { Permissions.promptForAccessibility() }
 
         case .failed:
+            collapseSelection(of: capture)
             restorePasteboardNow(restoreTo)
             tell("Text fix failed", "Could not put the fixed text back.", isError: true)
         }
@@ -328,9 +337,12 @@ final class FixService {
 
     // ---- pasteboard ----
 
-    private func schedulePasteboardRestore(_ snapshot: PasteboardSnapshot, afterMs: Int) {
+    private func schedulePasteboardRestore(
+        _ snapshot: PasteboardSnapshot, afterMs: Int, paste: (count: Int, text: String)
+    ) {
         flushPendingRestore()
         pendingRestore = snapshot
+        pendingPaste = paste
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingRestoreWork = nil
@@ -350,6 +362,15 @@ final class FixService {
         pendingRestoreWork = nil
         guard let snapshot = pendingRestore else { return }
         pendingRestore = nil
+        let paste = pendingPaste
+        pendingPaste = nil
+        // The count alone does not tell: a host that reads the paste late can move it. Only a
+        // pasteboard that no longer holds the paste is a copy by the user, and that copy stays.
+        if let paste, PasteboardBridge.changeCount != paste.count,
+           PasteboardBridge.text(maxUTF16: paste.text.utf16.count + 1) != paste.text {
+            Log.debug("The pasteboard changed after the paste; left as it is")
+            return
+        }
         PasteboardBridge.restoreOrClear(snapshot)
     }
 
@@ -362,12 +383,22 @@ final class FixService {
     /// landed on it while the request was out. That is most likely the user copying something,
     /// and it is now what they are holding; the older snapshot would overwrite it.
     private func restoreAfterCapture(_ capture: TextCapture?) {
+        collapseSelection(of: capture)
         guard let capture, let saved = capture.saved else { return }
         guard !userCopiedSince(capture) else {
             Log.debug("The pasteboard changed during the request; left as it is")
             return
         }
         PasteboardBridge.restoreOrClear(saved)
+    }
+
+    /// Cmd+A left the whole field selected and nothing was pasted over it. With the text still
+    /// selected, the next key that the user types would replace all of it. Only the pasteboard
+    /// path sends Cmd+A; the Accessibility read selects nothing.
+    private func collapseSelection(of capture: TextCapture?) {
+        guard let capture, capture.mode == .wholeText, capture.source == .pasteboard,
+              TextTarget.stillFocused(pid: capture.appPid, element: capture.element) else { return }
+        Keystrokes.collapseSelection()
     }
 
     /// True when the pasteboard holds something new that is not the text of the capture.

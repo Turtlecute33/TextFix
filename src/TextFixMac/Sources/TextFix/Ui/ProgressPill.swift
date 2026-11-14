@@ -41,7 +41,7 @@ final class ProgressPill {
     ///   request is in flight. Calling `show` again only promotes; it never moves the pill or
     ///   restarts the entrance.
     func show(near caretRect: CGRect?, working: Bool) {
-        let panel = ensurePanel()
+        var panel = ensurePanel()
         let now = CACurrentMediaTime()
         if !visible {
             visible = true
@@ -51,6 +51,14 @@ final class ProgressPill {
             panel.setFrameOrigin(origin(near: caretRect, size: panel.frame.size))
             enter(reduced: reduced)
             panel.orderFrontRegardless()
+            // The check in ensurePanel reads a window that is ordered out, and for that state
+            // AppKit tells where the window would go, not where it is. Now the answer is a fact.
+            if !panel.isOnActiveSpace {
+                let origin = panel.frame.origin
+                panel = moveToNewWindow(from: panel)
+                panel.setFrameOrigin(origin)
+                panel.orderFrontRegardless()
+            }
             animator?.start(
                 PillScene.Timeline(shownAt: now, workingAt: nil, hidingAt: nil, reduced: reduced),
                 generation: generation,
@@ -96,14 +104,8 @@ final class ProgressPill {
             // put it back: seen on macOS 27, where the pill stayed on two full-screen spaces and
             // was ordered in, but never drawn, on the desktop. Setting the collection behaviour
             // again does not repair it. A new window joins every space, so the views move to one.
-            guard !visible, !panel.isOnActiveSpace, let content = panel.contentView else { return panel }
-            Log.debug("Progress pill was not on the active space; moved it to a new window")
-            panel.orderOut(nil)
-            panel.contentView = NSView()
-            let fresh = makeWindow(size: panel.frame.size)
-            fresh.contentView = content
-            self.panel = fresh
-            return fresh
+            guard !visible, !panel.isOnActiveSpace else { return panel }
+            return moveToNewWindow(from: panel)
         }
 
         let margin = PillScene.margin
@@ -134,6 +136,17 @@ final class ProgressPill {
         self.panel = panel
         self.stage = stage
         return panel
+    }
+
+    private func moveToNewWindow(from panel: NSPanel) -> NSPanel {
+        guard let content = panel.contentView else { return panel }
+        Log.debug("Progress pill was not on the active space; moved it to a new window")
+        panel.orderOut(nil)
+        panel.contentView = NSView()
+        let fresh = makeWindow(size: panel.frame.size)
+        fresh.contentView = content
+        self.panel = fresh
+        return fresh
     }
 
     private func makeWindow(size: NSSize) -> NSPanel {

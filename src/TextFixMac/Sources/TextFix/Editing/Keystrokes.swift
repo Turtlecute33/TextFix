@@ -117,6 +117,23 @@ enum Keystrokes {
         return true
     }
 
+    /// Presses the Right arrow one time: the selection goes away and nothing is typed. Used when
+    /// Cmd+A selected a whole field and nothing was pasted over it. With all the text still
+    /// selected, the next key that the user types would replace it.
+    static func collapseSelection() {
+        // A cancel comes from the hotkey, so its modifiers can be down at this moment.
+        if releaseHeldModifiers() { sleep(ms: modifierSettleMs) }
+        let key = CGKeyCode(kVK_RightArrow)
+        guard let source,
+              let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { return }
+        down.flags = []
+        up.flags = []
+        down.post(tap: .cghidEventTap)
+        if keyEventDelayMs > 0 { sleep(ms: keyEventDelayMs) }
+        up.post(tap: .cghidEventTap)
+    }
+
     // ---- keyboard layout ----
 
     /// Where the letters this file presses sit on a US keyboard, used when the layout cannot be

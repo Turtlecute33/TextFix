@@ -27,6 +27,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var provider: AiProvider
     private var models: [ModelEntry] = []
     private var apiKeyDirty = false
+    /// A key typed for a provider that is not the one shown now. It is kept, so a change of the
+    /// provider and back does not lose it, and Save stores it with the others.
+    private var typedKeys: [AiProvider: String] = [:]
 
     // Controls read back on save.
     private let providerPopUp = Controls.popUp([])
@@ -393,6 +396,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     private func loadValues() {
         providerPopUp.selectItem(at: provider == .payPerQ ? 1 : 0)
+        // A slug written into config.json that the list does not have is shown as the custom
+        // model. If not, the pop-up shows its first entry and Save writes that entry over the slug.
+        let slug = config.model.trimmingCharacters(in: .whitespaces)
+        if !slug.isEmpty, !ModelCatalog.supports(provider, slug) {
+            config.customModel = slug
+            config.model = ModelCatalog.customSlug
+        }
         populateModels()
 
         apiKeyField.stringValue = SecretStore.hasApiKey(for: provider) ? Self.keyPlaceholder : ""
@@ -461,11 +471,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     // ---- actions ----
 
     @objc private func providerChanged() {
+        if apiKeyDirty { typedKeys[provider] = apiKeyField.stringValue }
         provider = providerPopUp.indexOfSelectedItem == 1 ? .payPerQ : .openRouter
         // Each provider has its own key and its own model namespace, so both fields follow the
         // selection instead of carrying a value that would fail on the new provider.
-        apiKeyField.stringValue = SecretStore.hasApiKey(for: provider) ? Self.keyPlaceholder : ""
-        apiKeyDirty = false
+        if let typed = typedKeys.removeValue(forKey: provider) {
+            apiKeyField.stringValue = typed
+            apiKeyDirty = true
+        } else {
+            apiKeyField.stringValue = SecretStore.hasApiKey(for: provider) ? Self.keyPlaceholder : ""
+            apiKeyDirty = false
+        }
         if !ModelCatalog.supports(provider, config.model) {
             config.model = ModelCatalog.entries(for: provider)[0].slug
         }
@@ -565,9 +581,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
 
         // The API key goes straight to the keychain rather than into the config object, so it never
-        // passes through config.json.
-        if apiKeyDirty {
-            let field = apiKeyField.stringValue
+        // passes through config.json. A key typed for the other provider is stored too.
+        var edited = typedKeys
+        if apiKeyDirty { edited[provider] = apiKeyField.stringValue }
+        for (keyProvider, field) in edited {
+            let name = keyProvider.displayName
             // Typing or pasting into the field while it shows the saved-key placeholder appends to
             // the bullets. No key contains one, so they are dropped instead of being saved as the
             // start of a key that then fails every request.
@@ -577,17 +595,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
                 // Untouched.
             } else if typed.isEmpty {
                 // An emptied field removes the key.
-                guard SecretStore.setApiKey("", for: provider) else {
-                    complain("Could not remove the stored API key. The log has the details.")
+                guard SecretStore.setApiKey("", for: keyProvider) else {
+                    complain("Could not remove the stored \(name) API key. The log has the details.")
                     return nil
                 }
             } else if !Self.looksLikeApiKey(typed) {
                 complain(
-                    "That does not look like an API key. Paste the whole key, or clear the field"
-                    + " to remove the one you have.")
+                    "The \(name) key does not look like an API key. Paste the whole key, or clear the"
+                    + " field to remove the one you have.")
                 return nil
-            } else if !SecretStore.setApiKey(typed, for: provider) {
-                complain("Could not save the API key. The log has the details.")
+            } else if !SecretStore.setApiKey(typed, for: keyProvider) {
+                complain("Could not save the \(name) API key. The log has the details.")
                 return nil
             }
         }

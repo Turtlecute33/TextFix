@@ -62,7 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // waiting for the user to press a hotkey and get an error.
             openSettings()
             if !Permissions.isTrusted { Permissions.requestWithSystemPrompt() }
-        } else if config.prewarmOnStartup, SecretStore.hasApiKey(for: config.providerValue) {
+        } else if config.prewarmOnStartup, !config.loadFailed, SecretStore.hasApiKey(for: config.providerValue) {
+            // Not after a config.json that could not be read: the defaults would bring this back
+            // for a user who turned it off.
             // Warms the TLS session so the first fix of the session is as fast as the second.
             // Opt-out, because it is the one thing the agent does without being asked.
             AiClient.prewarm(config.providerValue)
@@ -185,8 +187,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let saved {
                 saved.normalize()
                 self.config = saved
-                self.config.save()
-                Log.info("Settings saved")
+                if self.config.save() {
+                    Log.info("Settings saved")
+                } else {
+                    Toast.shared.show(
+                        title: "Settings not saved",
+                        message: "config.json could not be written. The new settings stay until TextFix quits. The log has the details.",
+                        isError: true)
+                }
             }
             self.applyConfig()
         }

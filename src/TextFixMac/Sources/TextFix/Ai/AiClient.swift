@@ -36,8 +36,14 @@ enum AiClient {
     private static let appTitle = "TextFix"
     private static let appCategories = "writing-assistant"
 
-    private static let prewarmMinGapMs = 90_000
     private static let prewarmTimeout: TimeInterval = 5
+
+    /// How long after the last contact a pooled connection is taken to be open. OpenRouter keeps
+    /// an idle connection for minutes. PayPerQ closes it after 5 seconds (`Keep-Alive: timeout=5`),
+    /// so a longer gap there skips the pre-warm exactly when the connection is gone.
+    private static func prewarmMinGapMs(_ provider: AiProvider) -> Int {
+        provider == .payPerQ ? 4_000 : 90_000
+    }
 
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -103,18 +109,18 @@ enum AiClient {
 
     /// Opens a pooled TCP+TLS connection to the provider ahead of the real request, so the
     /// handshake overlaps with the user's own think time instead of being charged to the wait.
-    /// Worth 30-200 ms on OpenRouter and 300-500 ms on PayPerQ. Sends no Authorization header and
+    /// Worth 30-200 ms on OpenRouter and 300-600 ms on PayPerQ. Sends no Authorization header and
     /// no payload: nothing that identifies the user leaves the machine, only a handshake to a host
     /// they have already chosen to use.
     static func prewarm(_ provider: AiProvider) {
-        guard state.beginPrewarmIfDue(gapMs: prewarmMinGapMs) else { return }
+        guard state.beginPrewarmIfDue(gapMs: prewarmMinGapMs(provider)) else { return }
         Task.detached(priority: .utility) {
             defer { state.endPrewarm() }
             var request = URLRequest(url: provider.prewarmEndpoint)
             request.httpMethod = "GET"
             request.timeoutInterval = prewarmTimeout
             // Reading the body is what returns the socket to the pool; without it the whole
-            // exercise is a no-op. Unauthenticated, so a 401 body is the expected answer.
+            // exercise is a no-op. Unauthenticated, and each endpoint answers with a few bytes.
             if (try? await session.data(for: request)) != nil {
                 state.touch()
             }
@@ -127,12 +133,15 @@ enum AiClient {
         // time and must not be handed a fresh full budget.
         let deadline = Date().addingTimeInterval(Double(req.totalBudgetMs) / 1000)
 
+        // The two providers share model slugs, and a fact learned on one says nothing about the
+        // other, so the provider is part of the key.
+        let routeKey = "\(req.provider.pref)|\(req.model)"
         var suppressReasoning = req.disableReasoning
-            && RouteFacts.shared.isReasoningControlKnownRejected(req.model)
+            && RouteFacts.shared.isReasoningControlKnownRejected(routeKey)
         let zdrWanted = req.provider == .openRouter && req.useZeroDataRetention
         // A model whose ZDR route we already found missing would otherwise pay for a doomed
         // attempt on every single fix just to rediscover it.
-        let zdrSuppressed = zdrWanted && RouteFacts.shared.isZdrKnownUnavailable(req.model)
+        let zdrSuppressed = zdrWanted && RouteFacts.shared.isZdrKnownUnavailable(routeKey)
         // Reported even when it comes from the cache rather than a live refusal, so the caller
         // knows about every affected request and not only the first one in 30 minutes.
         var fellBack = zdrSuppressed
@@ -155,10 +164,13 @@ enum AiClient {
                     let answer = try await perform(
                         userText: userText, req: req, enforceZdr: zdr,
                         disableReasoning: chatTuningApplies(), deadline: deadline)
-                    Log.debug("Attempt \(attempt + 1) answered in \(elapsedMs()) ms")
+                    // Read now: the log builds its message later, on its own queue.
+                    let ms = elapsedMs()
+                    Log.debug("Attempt \(attempt + 1) answered in \(ms) ms")
                     return answer
                 } catch let error as AiError {
-                    Log.debug("Attempt \(attempt + 1) failed (status \(error.statusCode)) after \(elapsedMs()) ms")
+                    let ms = elapsedMs()
+                    Log.debug("Attempt \(attempt + 1) failed (status \(error.statusCode)) after \(ms) ms")
                     if zdr, req.provider == .openRouter,
                        RouteFacts.isZdrRouteUnavailable(error.statusCode, error.errorBody) {
                         throw AiError(
@@ -225,7 +237,7 @@ enum AiClient {
             } catch let error as AiError
                 where chatTuningApplies() && RouteFacts.isReasoningControlRejected(error.statusCode, error.errorBody) {
                 suppressReasoning = true
-                RouteFacts.shared.markReasoningControlRejected(req.model)
+                RouteFacts.shared.markReasoningControlRejected(routeKey)
                 return try await withRetries(zdr: zdr)
             }
         }
@@ -239,7 +251,7 @@ enum AiClient {
             // still refuses every provider that keeps the text to train on (see
             // deniesDataCollection), and fails rather than go further.
             if RouteFacts.isZdrVerdictCacheable(error.statusCode, error.errorBody) {
-                RouteFacts.shared.markZdrUnavailable(req.model)
+                RouteFacts.shared.markZdrUnavailable(routeKey)
             }
             Log.info("No zero-data-retention route; retrying with data collection denied")
             fellBack = true

@@ -36,10 +36,12 @@ enum AiProvider: CaseIterable {
     }
 
     /// The URL used to open a pooled TLS connection ahead of a real request. Unauthenticated on
-    /// purpose: a pre-warm must never carry anything that identifies the user.
+    /// purpose: a pre-warm must never carry anything that identifies the user. Each one answers
+    /// with a few bytes. The model list of PayPerQ is public and 300 KB, and its HTTP/1.1
+    /// connection is busy until the last byte arrives, so that is not the URL to use.
     var prewarmEndpoint: URL {
         switch self {
-        case .payPerQ: return Endpoints.payPerQModels
+        case .payPerQ: return Endpoints.payPerQRoot
         case .openRouter: return Endpoints.openRouterKey
         }
     }
@@ -58,7 +60,7 @@ enum Endpoints {
     static let openRouterChat = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
     static let openRouterKey = URL(string: "https://openrouter.ai/api/v1/key")!
     static let payPerQChat = URL(string: "https://api.ppq.ai/chat/completions")!
-    static let payPerQModels = URL(string: "https://api.ppq.ai/v1/models")!
+    static let payPerQRoot = URL(string: "https://api.ppq.ai/")!
 }
 
 enum PricingTier: String {
