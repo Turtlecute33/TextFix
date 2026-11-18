@@ -231,7 +231,12 @@ internal static unsafe class ClipboardBridge
                 }
 
                 nint handle = Win32.GetClipboardData(format);
-                if (handle == 0) continue;
+                // A delayed format that its owner could not render. It is lost, so say so.
+                if (handle == 0)
+                {
+                    snapshot.Complete = false;
+                    continue;
+                }
                 nuint size = Win32.GlobalSize(handle);
                 // Zero means this is not a global-memory handle (a GDI bitmap, say). Copying it
                 // would be meaningless, so record that the restore will be partial.
