@@ -75,6 +75,10 @@ internal sealed class FixService
     /// <summary>True while an indicator is on screen, so every exit path can take it down again.</summary>
     private bool _indicatorShown;
 
+    /// <summary>When the last fix pasted its text, in <see cref="Environment.TickCount64"/> ms.</summary>
+    private long? _pastedAt;
+    private const long PasteSettleMs = 300;
+
     internal FixService(nint hwnd, TrayIcon tray, Func<AppConfig> config)
     {
         _hwnd = hwnd;
@@ -90,6 +94,10 @@ internal sealed class FixService
             Cancel();
             return;
         }
+        // The paste of the last fix can still be in progress: the host reads the clipboard in
+        // this time. A press now is most often a cancel that came late. A new capture would
+        // restore the clipboard early and send Ctrl+C into an app that is still pasting.
+        if (_pastedAt is long pastedAt && Environment.TickCount64 - pastedAt < PasteSettleMs) return;
 
         // The previous fix may still have a clipboard restore sitting on the timer. Taking a
         // snapshot now would record our own output as "what the user was holding", and arming a
@@ -347,6 +355,7 @@ internal sealed class FixService
         switch (outcome)
         {
             case ReplaceOutcome.Pasted:
+                _pastedAt = Environment.TickCount64;
                 if (restoreTo != null)
                 {
                     // The paste needs the clipboard to stay put for a moment: some hosts read it

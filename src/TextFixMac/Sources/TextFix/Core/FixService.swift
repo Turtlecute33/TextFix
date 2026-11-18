@@ -37,6 +37,10 @@ final class FixService {
     /// True while an indicator is on screen, so every exit path can take it down again.
     private var indicatorShown = false
 
+    /// When the last fix replaced its text, in seconds of system uptime.
+    private var replacedAt: TimeInterval?
+    private static let pasteSettleSeconds: TimeInterval = 0.3
+
     init(config: @escaping () -> AppConfig, statusItem: StatusItem) {
         self.config = config
         self.statusItem = statusItem
@@ -48,6 +52,12 @@ final class FixService {
         // A second press is a cancel, not a second request: the first one still owns the caret.
         if state == .working {
             cancel()
+            return
+        }
+        // The paste of the last fix can still be in progress: the host reads the pasteboard in
+        // this time. A press now is most often a cancel that came late. A new capture would
+        // restore the pasteboard early and copy from an app that is still pasting.
+        if let replacedAt, ProcessInfo.processInfo.systemUptime - replacedAt < Self.pasteSettleSeconds {
             return
         }
 
@@ -289,6 +299,7 @@ final class FixService {
 
         switch outcome {
         case .replaced:
+            replacedAt = ProcessInfo.processInfo.systemUptime
             // Whether the pasteboard was borrowed is a fact, not something to infer from the
             // configured mode: an Accessibility write that was refused falls back to a paste, and
             // a paste that happened needs the delay whatever asked for it.
