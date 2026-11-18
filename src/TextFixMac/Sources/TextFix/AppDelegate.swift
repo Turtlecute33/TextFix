@@ -62,7 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // waiting for the user to press a hotkey and get an error.
             openSettings()
             if !Permissions.isTrusted { Permissions.requestWithSystemPrompt() }
-        } else if config.prewarmOnStartup, !config.loadFailed, SecretStore.hasApiKey(for: config.providerValue) {
+        } else if config.prewarmOnStartup, !config.dryRun, !config.loadFailed,
+                  SecretStore.hasApiKey(for: config.providerValue) {
             // Not after a config.json that could not be read: the defaults would bring this back
             // for a user who turned it off.
             // Warms the TLS session so the first fix of the session is as fast as the second.

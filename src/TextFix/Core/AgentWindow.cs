@@ -73,7 +73,7 @@ internal sealed unsafe class AgentWindow
             // waiting for the user to press a hotkey and get an error.
             OpenSettings();
         }
-        else if (_config.PrewarmOnStartup && !_config.LoadFailed && SecretStore.HasApiKey(_config.ProviderValue))
+        else if (_config.PrewarmOnStartup && !_config.DryRun && !_config.LoadFailed && SecretStore.HasApiKey(_config.ProviderValue))
         {
             // Not after a config.json that could not be read: the defaults would bring this back
             // for a user who turned it off.
