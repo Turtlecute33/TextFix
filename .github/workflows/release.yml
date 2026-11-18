@@ -63,4 +63,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
-        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes *.zip *.pkg.tar.zst SHA256SUMS.txt
+        run: gh release create "$TAG" --verify-tag --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes *.zip *.pkg.tar.zst SHA256SUMS.txt
