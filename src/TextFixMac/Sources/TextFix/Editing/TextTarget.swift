@@ -267,6 +267,12 @@ enum TextTarget {
         Log.debug("Selection probe: \(probeLength.map { "\($0) characters" } ?? "nothing selected")")
 
         if text == nil || text!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if PasteboardBridge.holdsCopyWithoutText(baseline: baseline) {
+                // The copy happened, but it has no text: a picture in a document, a file. That is
+                // a selection, so Select All must not follow - it would end with the whole
+                // document replaced by plain text.
+                return cleanup("The selection has no text.")
+            }
             guard options.allowSelectAll else { return cleanup("Nothing is selected.") }
 
             // Nothing was selected: take the whole field. Cmd+A leaves it selected, so the paste at

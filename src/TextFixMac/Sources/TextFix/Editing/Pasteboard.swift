@@ -163,6 +163,14 @@ enum PasteboardBridge {
         NSPasteboard.general.clearContents()
     }
 
+    /// True when a copy replaced the probe marker with content that has no text, such as a picture
+    /// or a file. Reads only the list of types, so no promise is rendered.
+    static func holdsCopyWithoutText(baseline: Int) -> Bool {
+        guard changeCount != baseline, let types = NSPasteboard.general.types,
+              !types.contains(.string) else { return false }
+        return types.contains { [.png, .tiff, .pdf, .rtfd, .fileURL].contains($0) }
+    }
+
     /// A value nothing else will ever put on the pasteboard. Written before a probing Cmd+C so that
     /// "did the copy happen" becomes "is the marker still there", which is decidable.
     static func newProbeMarker() -> String {
