@@ -217,6 +217,8 @@ enum TextTarget {
         var probeMarker: String?
         // True after Cmd+A went out. A failure after that must not leave the field selected.
         var selectedAll = false
+        // True when the focus moved before Cmd+A could go out.
+        var focusLost = false
 
         // Every failure below happens after the pasteboard has been overwritten with a probe
         // marker, so failing has to put the user's pasteboard back. Nothing else in the pipeline
@@ -280,6 +282,12 @@ enum TextTarget {
             // asks for its result, or an app that handles both chords in one batch answers from the
             // pre-selection state.
             func readWholeField(settleMs: Int, chordDelayMs: Int?) -> String? {
+                // Cmd+A goes to the focus. If the user moved on, it would select, and the copy
+                // would send, the text of another window.
+                guard stillFocused(pid: pid, element: element) else {
+                    focusLost = true
+                    return nil
+                }
                 guard Keystrokes.sendCommandChord("a", eventDelayMsOverride: chordDelayMs) else { return nil }
                 selectedAll = true
                 Keystrokes.sleep(ms: settleMs)
@@ -315,7 +323,7 @@ enum TextTarget {
                     settleMs: Keystrokes.slowChordSettleMs, chordDelayMs: Keystrokes.slowKeyEventDelayMs)
             }
             guard let whole = text, !whole.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return cleanup(readFailureMessage())
+                return cleanup(focusLost ? "Focus changed before TextFix could read the text." : readFailureMessage())
             }
             text = whole
             mode = .wholeText

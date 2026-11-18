@@ -145,6 +145,8 @@ internal static unsafe class TextTarget
         // True after Ctrl+A went out. A failure after that must not leave the field selected:
         // with all the text selected, the next key that the user types would replace it.
         bool selectedAll = false;
+        // True when the focus moved before Ctrl+A could go out.
+        bool focusLost = false;
 
         // Every failure below happens after the clipboard has been overwritten with a probe
         // marker, so failing has to put the user's clipboard back. Nothing else in the pipeline
@@ -217,6 +219,14 @@ internal static unsafe class TextTarget
             // answers from the pre-selection state.
             string? ReadWholeField(int settleMs, int? chordDelayMs)
             {
+                // Ctrl+A goes to the focus. If the user moved on, it would select, and the copy
+                // would send, the text of another window.
+                nint now = Win32.GetForegroundWindow();
+                if (now != foreground || (focus != 0 && GetFocusWindow(now) != focus))
+                {
+                    focusLost = true;
+                    return null;
+                }
                 if (!Keystrokes.SendCtrlChord(VK.KEY_A, chordDelayMs)) return null;
                 selectedAll = true;
                 Thread.Sleep(settleMs);
@@ -256,7 +266,9 @@ internal static unsafe class TextTarget
             Log.Debug("Whole-field read: " + (text == null ? "nothing" : text.Length + " characters"));
             if (string.IsNullOrWhiteSpace(text))
             {
-                error = Cleanup("Could not read any text from that field.");
+                error = Cleanup(focusLost
+                    ? "Focus changed before TextFix could read the text."
+                    : "Could not read any text from that field.");
                 return false;
             }
             mode = CaptureMode.WholeText;
