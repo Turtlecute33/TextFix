@@ -311,6 +311,9 @@ final class AppConfig: Codable {
             // with no working hotkeys and nothing whatsoever in the log to say why - which is the
             // worst possible way to find out about it.
             Log.warn("config.json has an unreadable \"actions\" list; using the built-in actions for this session")
+            // The user's prompts are in that list. Without this, the next save writes the
+            // built-in actions over them and keeps no config.json.bad.
+            loadFailed = true
         }
     }
 
