@@ -147,7 +147,7 @@ A bare letter or digit is rejected on purpose - claiming `A` globally would brea
 on the machine.
 
 Defaults are `Ctrl+Alt+J` on Windows and `Ctrl+Opt+J` on macOS. Linux shortcuts are configured
-by your desktop; the Omarchy examples use `Ctrl+Alt+J` and `Ctrl+Alt+K`, on key release.
+by your desktop; the Omarchy examples use `Ctrl+Alt+J` and `Ctrl+Alt+K`, on key press.
 
 <br>
 
@@ -228,7 +228,8 @@ keeps your copy and does not give you the fixed text.
 
 A small glass capsule with three white dots comes up at the bottom centre of the screen, above the
 Dock or the taskbar. It is always in the same place, so you find it without a search, and it never
-covers the text that TextFix fixes. The screen is the one with your caret. The capsule is
+covers the text that TextFix fixes. The screen is the one with your caret (on Linux X11, the one
+with the pointer; on Wayland, the compositor picks it). The capsule is
 click-through, never takes the focus and never shows in the window switcher.
 
 It has two stages, because you ask two different questions. The capsule comes up with still, dim
