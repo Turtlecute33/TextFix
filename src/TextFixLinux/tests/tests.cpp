@@ -290,6 +290,7 @@ private slots:
         QVERIFY(!Desktop::isOwnWindow({"1", "org.mozilla.firefox"}));
         QVERIFY(Desktop::isTerminal({"1", "st-256color"}));
         QVERIFY(Desktop::isTerminal({"1", "dev.warp.Warp"}));
+        QVERIFY(Desktop::isTerminal({"1", "org.gnome.Terminal"}));
         QVERIFY(!Desktop::isTerminal({"1", "WM_CLASS(STRING) = \"code\", \"Code\""}));
         QVERIFY(!Desktop::isTerminal({"1", "org.mozilla.firefox"}));
     }

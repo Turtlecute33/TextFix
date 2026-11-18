@@ -45,7 +45,7 @@ bool Desktop::setText(const QString &text) {
 // command mode can run what the model wrote. The other agents refuse terminals for this reason.
 bool Desktop::isTerminal(const Focus &focus) {
     static const QRegularExpression pattern(
-        "\\b(kitty|alacritty|ghostty|foot|footclient|wezterm|gnome-terminal|ptyxis|kgx|org\\.gnome\\.Console|konsole"
+        "\\b(kitty|alacritty|ghostty|foot|footclient|wezterm|gnome-terminal|org\\.gnome\\.Terminal|ptyxis|kgx|org\\.gnome\\.Console|konsole"
         "|xterm|urxvt|tilix|terminator|xfce4-terminal|lxterminal|qterminal|terminology|blackbox"
         "|mate-terminal|deepin-terminal|io\\.elementary\\.terminal|com\\.system76\\.CosmicTerm|cosmic-term|st"
         "|rio|warp|tabby|hyper|sakura|guake|yakuake|tilda|contour|cool-retro-term|termite|termius)\\b"
