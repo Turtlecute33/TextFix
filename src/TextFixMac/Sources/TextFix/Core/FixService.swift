@@ -189,7 +189,12 @@ final class FixService {
                         error: nil)
                 }
             } catch is CancellationError {
-                // The user asked for it; nothing to report.
+                // Normally the user asked for it, and cancel() has cleaned up: the token is then
+                // stale and this does nothing. A cancel that came from the system must still end
+                // the request, or the indicator and the borrowed pasteboard wait forever.
+                DispatchQueue.main.async {
+                    self?.complete(token: token, text: nil, zdrFallbackModel: nil, error: "The request was cancelled.")
+                }
             } catch {
                 Log.warn("Text fix failed: " + AiErrors.scrub("\(type(of: error)): \(error)"))
                 let message = AiErrors.userFacing(error, fallback: "Could not fix that text.")
