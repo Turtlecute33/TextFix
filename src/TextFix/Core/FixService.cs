@@ -368,6 +368,16 @@ internal sealed class FixService
                 break;
 
             case ReplaceOutcome.FocusChanged:
+                // A copy made while the request was out is the user's data. The fixed text can be
+                // made again; the copy cannot.
+                if (UserCopiedSince(capture))
+                {
+                    Notify(
+                        "Text not replaced",
+                        "Focus changed while TextFix worked. Your clipboard was kept, so the fixed text was not.",
+                        isError: false);
+                    break;
+                }
                 // Never paste into a window the user switched to. Hand them the text instead -
                 // flagged transient, because a rewrite they never asked to keep has no business
                 // being archived in Win+V history or synced to their other devices.

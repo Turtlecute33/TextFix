@@ -310,11 +310,20 @@ final class FixService {
             // Never write into a window the user switched to, or on top of a write that may still
             // land. Hand them the text instead - flagged transient, because a rewrite they never
             // asked to keep has no business being archived by a clipboard manager.
-            let replacing = capture.saved.map { !$0.isEmpty } ?? PasteboardBridge.hasContent
-            PasteboardBridge.setText(proposed, transient: true)
             let reason = outcome == .unconfirmed
                 ? "The app did not confirm the change."
                 : "Focus or the text changed while TextFix worked."
+            // A copy made while the request was out is the user's data. The fixed text can be
+            // made again; the copy cannot.
+            if userCopiedSince(capture) {
+                tell("Text not replaced", "\(reason) Your clipboard was kept, so the fixed text was not.", isError: false)
+                break
+            }
+            let replacing = capture.saved.map { !$0.isEmpty } ?? PasteboardBridge.hasContent
+            guard PasteboardBridge.setText(proposed, transient: true) else {
+                tell("Text not replaced", "\(reason) The fixed text could not be put on your clipboard.", isError: true)
+                break
+            }
             tell(
                 "Text not replaced",
                 replacing

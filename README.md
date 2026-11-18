@@ -218,7 +218,8 @@ you had copied.
 
 The one case where your clipboard does *not* come back is when you switch windows mid-request. There
 is only one clipboard, and handing you the fixed text means overwriting what was on it; TextFix says
-so in the notice rather than doing it quietly.
+so in the notice rather than doing it quietly. If you copied something while the fix ran, TextFix
+keeps your copy and does not give you the fixed text.
 
 <br>
 
