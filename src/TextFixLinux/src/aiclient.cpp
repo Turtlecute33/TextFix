@@ -167,7 +167,10 @@ QString AiText::clean(const QString &answer, const QString &original, const QStr
     if (match.hasMatch()) {
         QString tag = match.captured(1);
         const QString templated = tag.section('-', 0, -2) + "-{nonce}";
-        if (prompt.contains("<" + tag + ">", Qt::CaseInsensitive) || prompt.contains("<" + templated + ">", Qt::CaseInsensitive))
+        // Only the shape of a nonce, eight hex digits. Markup such as <text-area> stays.
+        const bool nonce = QRegularExpression("-[0-9A-Fa-f]{8}$").match(tag).hasMatch();
+        if (prompt.contains("<" + tag + ">", Qt::CaseInsensitive)
+            || (nonce && prompt.contains("<" + templated + ">", Qt::CaseInsensitive)))
             result = match.captured(2).trimmed();
     }
     QString safe;

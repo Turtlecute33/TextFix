@@ -139,6 +139,9 @@ enum AiText {
         if prompt.range(of: "<\(name)>", options: .caseInsensitive) != nil { return true }
         guard let dash = name.lastIndex(of: "-"), dash > name.startIndex else { return false }
         let base = name[...dash]
+        // Only the shape of a nonce, eight hex digits. Markup such as <text-area> stays.
+        let nonce = name[name.index(after: dash)...]
+        guard nonce.count == 8, nonce.allSatisfy(\.isHexDigit) else { return false }
         return prompt.range(of: "<\(base)\(nonceToken)>", options: .caseInsensitive) != nil
     }
 

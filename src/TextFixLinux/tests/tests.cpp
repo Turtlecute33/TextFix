@@ -201,9 +201,12 @@ private slots:
     }
     void cleansWithoutDestroyingLanguageMarks() {
         QString error;
-        QCOMPARE(AiText::clean(QString::fromUtf8("<text-abcd>new\u200b \u200c\u200d\u200ftext</text-abcd>"), " old \n", Config::fixPrompt(), &error),
+        QCOMPARE(AiText::clean(QString::fromUtf8("<text-1a2b3c4d>new\u200b \u200c\u200d\u200ftext</text-1a2b3c4d>"), " old \n", Config::fixPrompt(), &error),
                  QString::fromUtf8(" new \u200c\u200d\u200ftext \n"));
         QVERIFY(error.isEmpty());
+        // Markup that only looks like the fence comes back as it was.
+        QCOMPARE(AiText::clean("<text-area>Hello</text-area>", "<text-area>Helo</text-area>", Config::fixPrompt(), &error),
+                 "<text-area>Hello</text-area>");
         error.clear();
         QVERIFY(AiText::clean(QString(10001, 'a'), "small", {}, &error).isEmpty());
         QVERIFY(!error.isEmpty());

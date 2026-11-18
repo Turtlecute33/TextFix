@@ -163,7 +163,10 @@ internal static class AiText
     {
         if (prompt.Contains("<" + name + ">", StringComparison.OrdinalIgnoreCase)) return true;
         int dash = name.LastIndexOf('-');
+        // Only the shape of a nonce, eight hex digits. Markup such as <text-area> stays.
         return dash > 0
+            && name.Length - dash == 9
+            && name[(dash + 1)..].All(char.IsAsciiHexDigit)
             && prompt.Contains("<" + name[..(dash + 1)] + NonceToken + ">", StringComparison.OrdinalIgnoreCase);
     }
 
