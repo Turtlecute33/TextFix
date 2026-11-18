@@ -133,6 +133,9 @@ private slots:
         QTemporaryDir dir;
         write(dir.filePath("config.json"), "{bad json");
         qputenv("TEXTFIX_API_KEY", "test-key");
+        // The keyring comes first. No session bus, so secret-tool cannot read a real key here.
+        const QByteArray bus = qgetenv("DBUS_SESSION_BUS_ADDRESS");
+        qputenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=" + dir.filePath("no-dbus").toUtf8());
         FakeDesktop desktop;
         // Dry run is off here, so the backend gets a local endpoint: nothing goes to a real host.
         FakeProvider provider;
@@ -143,6 +146,7 @@ private slots:
         QVERIFY(backend.busy());
         backend.cancel();
         qunsetenv("TEXTFIX_API_KEY");
+        if (bus.isEmpty()) qunsetenv("DBUS_SESSION_BUS_ADDRESS"); else qputenv("DBUS_SESSION_BUS_ADDRESS", bus);
         QCOMPARE(desktop.clipboard, "original clipboard");
     }
     void untouchedOldPromptMovesToTheNewOne() {

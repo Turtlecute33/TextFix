@@ -32,8 +32,9 @@ On Arch / Omarchy, install `qt6-base qt6-declarative qt6-svg qt6-wayland
 wl-clipboard libsecret`. Install `xdotool xorg-xprop` as well for X11.
 A running Secret Service provider, such as GNOME Keyring or KeePassXC with Secret
 Service integration enabled, is needed to save keys. `TEXTFIX_API_KEY` is also
-accepted, including for headless use. It comes before the keyring and is sent to whichever
-provider is selected, so it must be a key of that provider. Keys never go in config.json.
+accepted, including for headless use. A key saved for the selected provider comes first;
+TEXTFIX_API_KEY is used only when there is none, and it is then sent to the selected provider.
+Keys never go in config.json.
 
 Run `textfix settings`, enter your provider key, pick a model, then save. Settings live
 in `$XDG_CONFIG_HOME/textfix/config.json` (normally `~/.config/textfix/config.json`).

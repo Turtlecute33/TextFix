@@ -159,14 +159,15 @@ bool Config::save(const QString &directory, const QJsonObject &config, QString *
 }
 
 QString Config::secret(const QString &provider, QString *error) {
+    // The key saved for this provider comes first. TEXTFIX_API_KEY has no provider, so it is only
+    // the fallback, for example on a machine with no keyring.
+    const auto result = runTool("secret-tool", {"lookup", "application", "textfix", "provider", provider}, {}, 30000);
+    const QString saved = result.ok ? QString::fromUtf8(result.output).trimmed() : QString();
+    if (!saved.isEmpty()) return saved;
     const QString env = qEnvironmentVariable("TEXTFIX_API_KEY").trimmed();
     if (!env.isEmpty()) return env;
-    auto result = runTool("secret-tool", {"lookup", "application", "textfix", "provider", provider}, {}, 30000);
-    if (!result.ok) {
-        *error = QObject::tr("No API key available. Save a key in Settings and unlock your Secret Service keyring, or set TEXTFIX_API_KEY.");
-        return {};
-    }
-    return QString::fromUtf8(result.output).trimmed();
+    *error = QObject::tr("No API key available. Save a key in Settings and unlock your Secret Service keyring, or set TEXTFIX_API_KEY.");
+    return {};
 }
 
 bool Config::storeSecret(const QString &provider, const QString &key, QString *error) {
