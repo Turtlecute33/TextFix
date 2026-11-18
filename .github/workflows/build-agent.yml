@@ -99,7 +99,7 @@ jobs:
             libsecret-tools wl-clipboard xdotool x11-utils zip desktop-file-utils
       - name: Build, test and package Linux and Omarchy agents
         env:
-          REF: ${{ inputs.ref || github.ref_name }}
+          REF: ${{ inputs.ref }}
           QT_QPA_PLATFORM: offscreen
           QT_QUICK_BACKEND: software
         run: |
@@ -143,7 +143,7 @@ jobs:
       - name: Build the native Omarchy package
         shell: bash
         env:
-          REF: ${{ inputs.ref || github.ref_name }}
+          REF: ${{ inputs.ref }}
         run: |
           version="${REF#v}"
           case "$version" in
@@ -188,10 +188,11 @@ jobs:
 
       - name: Build and package the agent
         # The tag drives CFBundleShortVersionString, so a release build is stamped with its own
-        # version and an ordinary CI build is not pretending to be one. A release started by hand
-        # passes the tag in `ref`; GITHUB_REF_NAME is then the branch it was started from.
+        # version and an ordinary CI build is not pretending to be one. Only a release passes the
+        # tag in `ref`. GITHUB_REF_NAME is not used: on a pull request it is "<number>/merge",
+        # which starts with a digit and is not a version.
         env:
-          REF: ${{ inputs.ref || github.ref_name }}
+          REF: ${{ inputs.ref }}
         run: |
           version="${REF#v}"
           case "$version" in

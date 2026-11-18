@@ -468,7 +468,7 @@ Build Linux and the Omarchy variant with Qt 6 development packages, qmake6, make
 ```
 
 See the [Linux build guide](src/TextFixLinux/README.md#build-and-test) for dependencies.
-CI builds all platforms on every push and pull request, including Linux x64/ARM64 and an
+CI builds all platforms on every push to main and every pull request, including Linux x64/ARM64 and an
 Omarchy Arch package. A release is a tag:
 
 ```bash
