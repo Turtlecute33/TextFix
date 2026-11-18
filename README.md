@@ -465,7 +465,7 @@ copy with an empty selection, so from outside it is indistinguishable from a sel
 .\build.ps1 -Rid win-arm64  # -> dist\win-arm64\TextFix.exe
 ```
 
-Needs the .NET 9 SDK and the MSVC C++ build tools, which the Native AOT compiler links with. The
+Needs the .NET 10 SDK and the MSVC C++ build tools, which the Native AOT compiler links with. The
 script puts `vswhere.exe` on PATH for you, so a Developer Command Prompt is not required.
 
 ```bash

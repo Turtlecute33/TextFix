@@ -12,7 +12,7 @@
 # output directory, the archive name, the release asset - is derived from it. Note the app
 # itself is direct Win32, so only Windows RIDs can work until that changes.
 #
-# Requires the .NET 9 SDK and the MSVC C++ build tools (the AOT compiler links with link.exe).
+# Requires the .NET 10 SDK and the MSVC C++ build tools (the AOT compiler links with link.exe).
 
 [CmdletBinding()]
 param(
@@ -35,7 +35,7 @@ if ((Test-Path (Join-Path $installer "vswhere.exe")) -and ($env:PATH -notlike "*
 }
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-    throw "dotnet was not found. Install the .NET 9 SDK: https://dotnet.microsoft.com/download"
+    throw "dotnet was not found. Install the .NET 10 SDK: https://dotnet.microsoft.com/download"
 }
 
 Write-Host "Publishing $Configuration for $Rid to $output" -ForegroundColor Cyan
