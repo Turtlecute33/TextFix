@@ -180,6 +180,8 @@ enum AiErrors {
             if ai.statusCode == 429 || ai.statusCode == 503 {
                 return "Provider is rate limiting. Try again in a moment."
             }
+            // The message names the parse step that failed, which tells the user nothing.
+            if ai.statusCode == AiStatus.unusableResponse { return "The provider returned an unusable response." }
             // OpenRouter answers a slug that it does not know with 400, not with 404.
             if ai.statusCode == 400, ai.errorBody.lowercased().contains("not a valid model") {
                 return actionable(404) ?? fallback

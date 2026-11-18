@@ -208,6 +208,8 @@ internal static class AiErrors
         if (e is AiException ai)
         {
             if (ai.StatusCode is 429 or 503) return "Provider is rate limiting. Try again in a moment.";
+            // The message names the parse step that failed, which tells the user nothing.
+            if (ai.StatusCode == AiStatus.UnusableResponse) return "The provider returned an unusable response.";
             // OpenRouter answers a slug that it does not know with 400, not with 404.
             if (ai.StatusCode == 400
                 && ai.ErrorBody.Contains("not a valid model", StringComparison.OrdinalIgnoreCase))
