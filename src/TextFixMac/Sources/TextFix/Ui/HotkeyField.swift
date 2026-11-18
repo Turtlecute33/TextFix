@@ -120,6 +120,12 @@ final class HotkeyField: NSView {
             onRejected?("\(candidate.display()) is a standard shortcut every app uses. Pick another combination.")
             return true
         }
+        // The agent checks config.json by key position when it loads. On a layout other than
+        // QWERTY, a key that passed the letter check above could be saved and then not used.
+        if let refusal = candidate.refusal {
+            onRejected?("\(candidate.display()): \(refusal). Pick another combination.")
+            return true
+        }
         binding = candidate
         onChange?(candidate)
         window?.makeFirstResponder(nil)
