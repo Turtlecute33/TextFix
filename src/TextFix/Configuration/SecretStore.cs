@@ -28,8 +28,15 @@ internal static class SecretStore
 
     private static string KeyFor(AiProvider provider) => provider.ToPref();
 
+    /// <summary>
+    /// True when the last <see cref="GetApiKey"/> found a saved key but could not read it. The
+    /// caller then says so, instead of asking for a key that is already saved.
+    /// </summary>
+    internal static bool LastReadFailed { get; private set; }
+
     internal static string GetApiKey(AiProvider provider)
     {
+        LastReadFailed = false;
         try
         {
             Dictionary<string, string> all = ReadAll();
@@ -39,7 +46,12 @@ internal static class SecretStore
             }
             byte[] cipher = Convert.FromBase64String(encoded);
             byte[]? plain = Unprotect(cipher);
-            if (plain == null) return string.Empty;
+            if (plain == null)
+            {
+                Log.Warn("Could not decrypt the stored API key");
+                LastReadFailed = true;
+                return string.Empty;
+            }
             try
             {
                 return Encoding.UTF8.GetString(plain);
@@ -58,6 +70,7 @@ internal static class SecretStore
             // must read as "no key" rather than taking the whole feature down: re-entering it in
             // settings overwrites the bad blob and self-heals.
             Log.Warn("Could not read stored API key: " + e.GetType().Name);
+            LastReadFailed = true;
             return string.Empty;
         }
     }

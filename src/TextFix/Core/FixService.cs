@@ -122,7 +122,14 @@ internal sealed class FixService
             apiKey = SecretStore.GetApiKey(provider);
             if (apiKey.Length == 0)
             {
-                Notify("No API key", "Add your " + provider.DisplayName() + " key in TextFix settings.", isError: true);
+                if (SecretStore.LastReadFailed)
+                {
+                    Notify("API key not read", "TextFix could not decrypt the saved key. Save the key again in TextFix settings.", isError: true);
+                }
+                else
+                {
+                    Notify("No API key", "Add your " + provider.DisplayName() + " key in TextFix settings.", isError: true);
+                }
                 return;
             }
             string? resolved = config.ResolveModel(action);
