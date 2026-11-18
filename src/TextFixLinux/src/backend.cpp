@@ -212,10 +212,10 @@ void Backend::probe(bool whole) {
     if (whole || !m_action.value("wholeTextWhenNoSelection").toBool(true)) {
         fail(tr("No selected text. Select editable text and try again.")); return;
     }
-    if (!m_desktop->shortcut(m_focus, "A") || !m_desktop->shortcut(m_focus, "C")) {
-        fail(tr("Could not select and copy this field.")); return;
-    }
+    if (!m_desktop->shortcut(m_focus, "A")) { fail(tr("Could not select and copy this field.")); return; }
+    // Set before the copy: if the copy fails, the cleanup must still deselect the field.
     m_whole = true;
+    if (!m_desktop->shortcut(m_focus, "C")) { fail(tr("Could not select and copy this field.")); return; }
     m_settled = false;
     m_copyWait.restart();
 }
