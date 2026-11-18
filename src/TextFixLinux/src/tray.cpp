@@ -40,12 +40,14 @@ void Tray::notify(const QString &text, int timeout) {
         call->deleteLater();
         --m_waiting;
         const QDBusPendingReply<uint> reply = *call;
-        if (reply.isError()) return;
-        const uint id = reply.value();
-        // The answer of an older call: a newer message is already on its way with a different
-        // number, so the old one must not stay on screen.
-        if (serial != m_serial) { if (id != m_notification) close(id); return; }
-        m_notification = id;
+        if (!reply.isError()) {
+            const uint id = reply.value();
+            // The answer of an older call: a newer message is already on its way with a different
+            // number, so the old one must not stay on screen.
+            if (serial != m_serial) { if (id != m_notification) close(id); }
+            else m_notification = id;
+        }
+        // Also after an error or an older answer: it can be the last reply that a clear waits for.
         if (m_clearWhenKnown) clearNotification();
     });
 }
