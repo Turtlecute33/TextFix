@@ -150,7 +150,9 @@ ApplicationWindow {
                     model: ["OpenRouter", "PayPerQ"]
                     Layout.fillWidth: true
                     Accessible.name: qsTr("Provider")
-                    onActivated: { win.showModels(win.selectedSlug(), custom.text); win.dirty = true }
+                    // A key belongs to the provider it was typed for. If the field kept it, Save
+                    // would store it for the new provider and send it to that company.
+                    onActivated: { win.showModels(win.selectedSlug(), custom.text); apiKey.clear(); win.dirty = true }
                 }
                 RowLayout {
                     spacing: 12
