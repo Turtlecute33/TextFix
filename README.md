@@ -168,7 +168,8 @@ most Electron hosts.
 Putting the text **back** goes through the clipboard and a synthesised Cmd+V by default, even though
 an Accessibility write would be faster. A paste travels the host's own paste path, so one Cmd+Z
 undoes it in one step everywhere; a fair number of apps record nothing undoable for a direct write.
-Settings > Behaviour will switch it if you would rather never touch the clipboard.
+Settings > Behaviour will switch it to a direct write. An app that refuses the write still gets a
+paste, so the clipboard is still borrowed then.
 
 Hosts that publish nothing usable - a canvas-rendered editor, a game - fall back to the Windows
 method below.
@@ -345,7 +346,7 @@ macOS only:
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `replaceMode` | `paste` | `paste` keeps Cmd+Z working; `accessibility` writes the field directly and never touches the clipboard. |
+| `replaceMode` | `paste` | `paste` keeps Cmd+Z working; `accessibility` writes the field directly, and pastes if the app refuses the write. |
 | `useAccessibilityRead` | `true` | Read through the Accessibility API when the focused element supports it. Turning it off forces the clipboard path everywhere. |
 | `restorePasteboard` | `true` | Put your clipboard back after the paste. |
 | `pasteboardRestoreDelayMs` | `180` | Raise it if an application pastes the old clipboard content. |

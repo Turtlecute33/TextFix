@@ -226,7 +226,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         replaceModePopUp.removeAllItems()
         replaceModePopUp.addItems(withTitles: [
-            "Pasting it — Cmd+Z undoes it", "Writing it directly — never touches the clipboard",
+            "Pasting it — Cmd+Z undoes it", "Writing it directly — pastes if the app refuses",
         ])
         replaceModePopUp.target = self
         replaceModePopUp.action = #selector(replaceModeChanged)
@@ -457,8 +457,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         // Zero data retention is an OpenRouter routing preference; on PayPerQ it is a property of
         // the model you pick, so the checkbox would promise something it cannot deliver.
         zdrCheck.isEnabled = provider == .openRouter
-        // The clipboard is only borrowed by the paste path.
-        restorePasteboardCheck.isEnabled = replaceModePopUp.indexOfSelectedItem == 0
 
         for index in 0..<actionEnabled.count {
             let on = actionEnabled[index].state == .on
