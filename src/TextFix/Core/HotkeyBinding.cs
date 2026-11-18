@@ -63,6 +63,39 @@ internal readonly record struct HotkeyBinding(uint Modifiers, uint VirtualKey)
         return string.Join("+", parts);
     }
 
+    /// <summary>
+    /// Why this binding must not be registered, or null when it is safe. The settings window
+    /// refuses these keys when they are saved. A config.json edited by hand gets the same check.
+    /// </summary>
+    internal string? Refusal
+    {
+        get
+        {
+            // Shift alone counts as no modifier: claiming Shift+A globally breaks typing a
+            // capital A everywhere on the machine.
+            if ((Modifiers & ~Win32.MOD_SHIFT) == 0 && !IsSafeUnmodifiedKey(VirtualKey))
+            {
+                return "it would be swallowed everywhere on this machine";
+            }
+            // TextFix presses Ctrl+A, Ctrl+C and Ctrl+V itself, and a hotkey on one of them would
+            // set itself off again from its own keystrokes.
+            if (Modifiers == Win32.MOD_CONTROL && IsEditingShortcut(VirtualKey))
+            {
+                return "it is a standard editing shortcut";
+            }
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// F13-F24 exist precisely because no keyboard sends them by accident, which makes them the
+    /// only keys worth claiming globally without a modifier.
+    /// </summary>
+    internal static bool IsSafeUnmodifiedKey(uint vk) => vk is >= 0x7C and <= 0x87;
+
+    /// <summary>Ctrl+A, C, V, X, Y and Z: the shortcuts every text box already uses.</summary>
+    internal static bool IsEditingShortcut(uint vk) => vk is 0x41 or 0x43 or 0x56 or 0x58 or 0x59 or 0x5A;
+
     /// <summary>Packs into the LOWORD shape HKM_SETHOTKEY expects.</summary>
     internal ushort ToControlValue()
     {

@@ -394,6 +394,7 @@ internal sealed unsafe class AgentWindow
     private void RegisterHotkeys()
     {
         var taken = new List<string>();
+        var refused = new List<string>();
         for (int i = 0; i < _config.Actions.Count; i++)
         {
             FixActionConfig action = _config.Actions[i];
@@ -404,6 +405,13 @@ internal sealed unsafe class AgentWindow
                 {
                     Log.Warn("Could not understand the hotkey for " + action.Name + ": " + action.Hotkey);
                 }
+                continue;
+            }
+            // config.json can be edited by hand, so the rules of the settings window apply here too.
+            if (binding.Refusal is string refusal)
+            {
+                Log.Warn("Hotkey for " + action.Name + " not registered: " + refusal);
+                refused.Add(action.Name + " (" + binding.Format() + ")");
                 continue;
             }
             int id = HotkeyIdBase + i;
@@ -417,6 +425,14 @@ internal sealed unsafe class AgentWindow
                 Log.Warn("Hotkey " + binding.Format() + " is already taken by another application");
                 taken.Add(action.Name + " (" + binding.Format() + ")");
             }
+        }
+        if (refused.Count > 0)
+        {
+            _tray?.ShowBalloon(
+                "Hotkey not used",
+                "It would break typing or editing in every app: " + string.Join(", ", refused)
+                    + ". Set a different hotkey in TextFix settings.",
+                isError: true);
         }
         if (taken.Count > 0)
         {

@@ -525,7 +525,7 @@ internal sealed unsafe class SettingsWindow
                 Complain("Give " + action.Name + " a hotkey, or turn it off.");
                 return false;
             }
-            if (!binding.IsEmpty && (binding.Modifiers & ~Win32.MOD_SHIFT) == 0 && !IsSafeUnmodifiedKey(binding.VirtualKey))
+            if (!binding.IsEmpty && (binding.Modifiers & ~Win32.MOD_SHIFT) == 0 && !HotkeyBinding.IsSafeUnmodifiedKey(binding.VirtualKey))
             {
                 // Shift alone counts as no modifier: claiming Shift+A globally breaks typing a
                 // capital A everywhere on the machine.
@@ -534,7 +534,7 @@ internal sealed unsafe class SettingsWindow
                     " Add Ctrl or Alt, or use one of F13-F24.");
                 return false;
             }
-            if (binding.Modifiers == Win32.MOD_CONTROL && IsEditingShortcut(binding.VirtualKey))
+            if (binding.Modifiers == Win32.MOD_CONTROL && HotkeyBinding.IsEditingShortcut(binding.VirtualKey))
             {
                 // TextFix presses Ctrl+A, Ctrl+C and Ctrl+V itself, and a hotkey on one of them
                 // would set itself off again from its own keystrokes.
@@ -597,15 +597,6 @@ internal sealed unsafe class SettingsWindow
         result.StartWithWindows = GetCheck(IdAutostart);
         return true;
     }
-
-    /// <summary>
-    /// F13-F24 exist precisely because no keyboard sends them by accident, which makes them the
-    /// only keys worth claiming globally without a modifier.
-    /// </summary>
-    private static bool IsSafeUnmodifiedKey(uint vk) => vk is >= 0x7C and <= 0x87;
-
-    /// <summary>Ctrl+A, C, V, X, Y and Z: the shortcuts every text box already uses.</summary>
-    private static bool IsEditingShortcut(uint vk) => vk is 0x41 or 0x43 or 0x56 or 0x58 or 0x59 or 0x5A;
 
     /// <summary>
     /// Deliberately a shape check, not a format check: both providers issue keys in their own
