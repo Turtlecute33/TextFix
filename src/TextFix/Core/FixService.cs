@@ -279,7 +279,10 @@ internal sealed class FixService
         // There is one balloon, and a new notice replaces the one before it. The zero-data-retention
         // notice is shown one time for each model, so it goes last and only when this fix has
         // nothing else to say. If not, it stays for the next fix.
-        if (fallbackModel != null && !_said && AiClient.ShouldWarnAboutZdrFallback(fallbackModel))
+        // Not while notices are off: the notice is shown one time for each model, and a notice
+        // that nobody saw must still come when the user turns them on.
+        if (fallbackModel != null && !_said && _config().NotifyOnError
+            && AiClient.ShouldWarnAboutZdrFallback(fallbackModel))
         {
             Notify(
                 "Zero data retention unavailable",

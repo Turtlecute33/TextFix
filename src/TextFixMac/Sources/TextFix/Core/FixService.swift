@@ -244,7 +244,10 @@ final class FixService {
             notify(title, message, isError: isError)
         }
         defer {
-            if let zdrFallbackModel, !said, AiClient.shouldWarnAboutZdrFallback(zdrFallbackModel) {
+            // Not while notices are off: the notice is shown one time for each model, and a
+            // notice that nobody saw must still come when the user turns them on.
+            if let zdrFallbackModel, !said, config.notifyOnError,
+               AiClient.shouldWarnAboutZdrFallback(zdrFallbackModel) {
                 notify(
                     "Zero data retention unavailable",
                     "No zero-retention route for \(zdrFallbackModel). TextFix used a provider that does not keep your text for training.",
