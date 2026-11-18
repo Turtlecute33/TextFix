@@ -64,6 +64,8 @@ if [[ "$configuration" == "release" ]]; then strip -x "$app/Contents/MacOS/TextF
 
 sed "s/__VERSION__/$version/g" "$package/Resources/Info.plist" > "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
+# GPL-3.0 travels with the binary, as in the Linux archives.
+cp "$root/LICENSE" "$app/Contents/Resources/LICENSE"
 
 echo "==> Drawing the icon"
 iconset="$(mktemp -d)/AppIcon.iconset"

@@ -49,8 +49,8 @@ Write-Host "Built TextFix.exe ($sizeMb MB, self-contained)" -ForegroundColor Gre
 if ($Zip) {
     $archive = Join-Path $root "TextFix-$Rid.zip"
     Remove-Item $archive -ErrorAction SilentlyContinue
-    # The exe alone is the release: no runtime, no side-by-side files, no installer.
-    Compress-Archive -Path $exe -DestinationPath $archive
+    # The exe and its licence are the release: no runtime, no side-by-side files, no installer.
+    Compress-Archive -Path $exe, (Join-Path $root "LICENSE") -DestinationPath $archive
     Write-Host "Packaged $archive" -ForegroundColor Green
 }
 
