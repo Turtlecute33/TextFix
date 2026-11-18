@@ -52,7 +52,9 @@ Two actions ship configured, each with its own hotkey and its own editable promp
    [latest release](https://github.com/Turtlecute33/TextFix/releases/latest) and unzip it, or build
    it yourself with `.\build.ps1`. Put `TextFix.exe` wherever you keep small tools;
    `%LOCALAPPDATA%\Programs\TextFix\` is a good spot.
-2. Run it. The settings window opens on first launch and the tray icon appears.
+2. Run it. The settings window opens on first launch and the tray icon appears. The exe is not
+   code-signed, so SmartScreen can stop the first run: choose **More info > Run anyway**. To check
+   the zip first, see [Checking a download](#checking-a-download).
 3. Paste your API key, pick a model, press the hotkey you want into the capture box, tick **Start
    TextFix when I sign in**, and save.
 
@@ -197,6 +199,14 @@ TextFix stops there. It does not press Ctrl+A, which would replace the whole doc
 (an error, a cancel, no change), TextFix presses the Right arrow, so the next key that you type
 does not replace all the text.
 
+**Leave the field alone while TextFix works.** TextFix checks that the same window and control
+still have the focus, but on this path it cannot see a click or typing inside that control. If you
+move the caret or change the selection during a request, the fixed text is pasted at the new
+place. One undo puts it back.
+
+**The fixed text is plain text.** Bold, links and pictures inside the selection are replaced with
+the fixed text, on every path. One undo puts them back after a paste.
+
 **Your clipboard comes back.** Whatever you were holding - text, files, an image, rich text - is
 copied out before the probe and restored about 180 ms after the paste. It comes back with the
 flags it had: a password copied from a password manager stays out of clipboard history when it is
@@ -205,9 +215,10 @@ put back. TextFix's own temporary text is flagged so clipboard managers, Windows
 `org.nspasteboard.TransientType` convention, and keeps everything it writes off Universal
 Clipboard.
 
-One copy TextFix cannot flag on Windows is the one the application itself makes when TextFix
-presses Ctrl+C. If you use clipboard history, the text you fix shows up there, as it would if you
-had copied it by hand.
+One copy TextFix cannot flag is the one the application itself makes when TextFix presses Ctrl+C,
+or Cmd+C on the macOS fallback path. If you use clipboard history, the text you fix shows up there,
+as it would if you had copied it by hand. On macOS that copy can also reach your other devices
+through Universal Clipboard.
 
 If you copy something else while a fix is running, that is what you get back afterwards, not the
 older clipboard.
@@ -291,6 +302,9 @@ work". Both can be switched off if you want the agent completely silent.
   whole field. Outside a text box it can be a whole web page or document, and TextFix sends it to
   your provider if it is not longer than `maxInputLength`. To stop this, untick **Whole field when
   nothing is selected** for the action.
+- **The macOS app is not sandboxed.** The App Sandbox does not let an app read or replace text in
+  other apps through the Accessibility API, or send keystrokes to them, and that is all TextFix
+  does. It runs with the hardened runtime and with no entitlements.
 - **Only two hosts, ever.** `openrouter.ai` and `api.ppq.ai`. Redirects are refused, so a request
   cannot be sent on to a third host. No telemetry, no analytics, no update check, no fonts or
   assets fetched at runtime. The Windows and macOS agents have no third-party dependencies;
@@ -414,6 +428,10 @@ if it does not, the log will name the step that stopped.
 or updating `TextFix.app` - `brew upgrade` included - changes its signature, and macOS then treats it
 as a different app: remove the old entry in System Settings > Privacy & Security > Accessibility
 with the minus button and add the new one.
+
+**On macOS, a keychain password prompt after an update.** The new build has a new ad-hoc
+signature, so on the first fix macOS asks whether TextFix may read its key. Enter your login
+password and choose **Always Allow**. If you deny, TextFix says "API key not read".
 
 **"TextFix does not work in terminal windows."** On purpose - see Privacy. Fix the text in an
 editor and paste it into the terminal.

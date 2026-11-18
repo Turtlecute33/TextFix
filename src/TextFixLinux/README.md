@@ -11,7 +11,9 @@ distribution rather than bundled in the download.
 Download `TextFix-linux-x64.zip` or `TextFix-linux-arm64.zip`, extract it and run
 `./install.sh`. This installs into `~/.local`; add `~/.local/bin` to PATH if needed.
 The Omarchy archives include Hyprland binding examples as well. `./install.sh --uninstall`
-removes the same files. It keeps `~/.config/textfix` and the key in your keyring.
+removes the same files. It keeps `~/.config/textfix` and the key in your keyring. To remove
+them too, run `secret-tool clear application textfix provider openrouter` (and `provider payperq`)
+and `rm -r ~/.config/textfix`.
 
 The release binaries are built on Ubuntu 24.04. They need glibc 2.39 or later and Qt 6.4 or
 later, which Ubuntu 24.04, Debian 13, Fedora 40 and Arch have. On an older distribution,
@@ -30,7 +32,8 @@ On Arch / Omarchy, install `qt6-base qt6-declarative qt6-svg qt6-wayland
 wl-clipboard libsecret`. Install `xdotool xorg-xprop` as well for X11.
 A running Secret Service provider, such as GNOME Keyring or KeePassXC with Secret
 Service integration enabled, is needed to save keys. `TEXTFIX_API_KEY` is also
-accepted, including for headless use. Keys never go in config.json.
+accepted, including for headless use. It comes before the keyring and is sent to whichever
+provider is selected, so it must be a key of that provider. Keys never go in config.json.
 
 Run `textfix settings`, enter your provider key, pick a model, then save. Settings live
 in `$XDG_CONFIG_HOME/textfix/config.json` (normally `~/.config/textfix/config.json`).
