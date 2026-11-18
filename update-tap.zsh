@@ -59,8 +59,9 @@ cask "textfix" do
     TextFix needs Accessibility permission:
       System Settings > Privacy & Security > Accessibility
 
-    Each release has a new signature, so after an upgrade macOS treats TextFix as a new app.
-    Remove the old TextFix entry in that list with the minus button, and add the new one.
+    Releases from 1.7.0 on share one signing certificate, so the permission stays after an
+    upgrade. After the upgrade from 1.6.x or older, remove the old TextFix entry in that list
+    with the minus button, and add the new one.
   EOS
 end
 CASK

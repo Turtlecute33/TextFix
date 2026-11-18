@@ -26,6 +26,10 @@ jobs:
       # A run started by hand checks out the tag it is releasing, not the branch it was started
       # from - otherwise "release v1.2.0" would publish whatever main holds today under that name.
       ref: ${{ inputs.tag || github.ref_name }}
+    # The macOS signing identity. Only the release gets it.
+    secrets:
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
 
   release:
     needs: build

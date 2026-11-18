@@ -74,8 +74,9 @@ Needs macOS 13 Ventura or later. The download is one universal app for Apple Sil
    Or download `TextFix-macos-universal.zip` from the
    [latest release](https://github.com/Turtlecute33/TextFix/releases/latest), unzip it and drag
    `TextFix.app` into **Applications**. Or build it yourself with `./build-mac.sh`.
-2. **The first launch is blocked after each install or upgrade.** The app is signed, but ad-hoc
-   rather than with a paid Apple Developer ID, so Gatekeeper wants you to say you meant it. On
+2. **The first launch is blocked after each install or upgrade.** The app is signed, but with
+   TextFix's own self-signed certificate rather than a paid Apple Developer ID, so Gatekeeper wants
+   you to say you meant it. On
    macOS 15 and later: open TextFix, click *Done*, then **System Settings > Privacy & Security >
    Open Anyway**. On macOS 13 and 14: right-click the app, choose *Open*, then *Open* again in the
    dialog.
@@ -88,6 +89,10 @@ Needs macOS 13 Ventura or later. The download is one universal app for Apple Sil
 
 Your key goes in the login keychain, not in `config.json`. Moving `TextFix.app` after granting
 Accessibility makes macOS forget the permission - put it in Applications first.
+
+From 1.7.0 on, every release is signed with the same certificate, so macOS keeps the Accessibility
+permission and the keychain access after an update. The first update from 1.6.x or older asks
+one more time.
 
 ### Linux
 
@@ -424,14 +429,15 @@ clipboard, replace, restore - but replaces the model call with UPPER CASE, so it
 costs nothing. If your text comes back uppercased the plumbing works and the problem is the request;
 if it does not, the log will name the step that stopped.
 
-**On macOS, the hotkey does nothing at all.** Check Accessibility permission. Rebuilding, replacing
-or updating `TextFix.app` - `brew upgrade` included - changes its signature, and macOS then treats it
-as a different app: remove the old entry in System Settings > Privacy & Security > Accessibility
-with the minus button and add the new one.
+**On macOS, the hotkey does nothing at all.** Check Accessibility permission. A build with a
+different signature is a different app for macOS: a build of your own, or the first update from
+1.6.x or older. Remove the old entry in System Settings > Privacy & Security > Accessibility with
+the minus button and add the new one.
 
-**On macOS, a keychain password prompt after an update.** The new build has a new ad-hoc
-signature, so on the first fix macOS asks whether TextFix may read its key. Enter your login
-password and choose **Always Allow**. If you deny, TextFix says "API key not read".
+**On macOS, a keychain password prompt after an update.** A build with a different signature (a
+build of your own, or the first update from 1.6.x or older) asks on the first fix whether TextFix
+may read its key. Enter your login password and choose **Always Allow**. If you deny, TextFix says
+"API key not read".
 
 **"TextFix does not work in terminal windows."** On purpose - see Privacy. Fix the text in an
 editor and paste it into the terminal.
@@ -503,6 +509,12 @@ Once the release is published, point the Homebrew cask at it:
 
 Every release zip carries a build provenance attestation. To check one, see
 [Checking a download](#checking-a-download).
+
+The release workflow signs the macOS app with the self-signed TextFix identity from the
+`MACOS_SIGN_P12` and `MACOS_SIGN_P12_PASSWORD` secrets, and stops when they are missing. Make
+them once with `./make-signing-identity.zsh`, which also keeps a backup keychain in
+`~/.config/textfix/`. Keep a copy of it: a new identity means one more permission grant for every
+user.
 
 <br>
 

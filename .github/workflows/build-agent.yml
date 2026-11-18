@@ -13,6 +13,13 @@ on:
         description: 'Tag or commit to build. Empty builds the commit that triggered the run.'
         type: string
         default: ''
+    # The macOS release identity (see make-signing-identity.zsh). Only release.yml passes it, so a
+    # pull request never runs with the signing key.
+    secrets:
+      MACOS_SIGN_P12:
+        required: false
+      MACOS_SIGN_P12_PASSWORD:
+        required: false
 
 # Building needs to read the repository and nothing else.
 permissions:
@@ -186,6 +193,32 @@ jobs:
       - name: Show toolchain
         run: swift --version
 
+      - name: Import the signing identity
+        # Every release is signed with the same self-signed certificate, so macOS keeps the
+        # Accessibility permission and the keychain access of TextFix after an update. Other builds
+        # have no secret and are ad-hoc signed. A release without the secret stops here.
+        env:
+          P12: ${{ secrets.MACOS_SIGN_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+          REF: ${{ inputs.ref }}
+        run: |
+          if [ -z "$P12" ]; then
+            if [ -n "$REF" ]; then echo "::error::A release needs the MACOS_SIGN_P12 secret."; exit 1; fi
+            echo "No signing identity: the build is ad-hoc signed."
+            exit 0
+          fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kcpw="$(openssl rand -base64 24)"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 900 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/identity.p12"
+          security import "$RUNNER_TEMP/identity.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/identity.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" >/dev/null
+          echo "MACOS_SIGN_IDENTITY=TextFix" >> "$GITHUB_ENV"
+          echo "MACOS_SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
+
       - name: Build and package the agent
         # The tag drives CFBundleShortVersionString, so a release build is stamped with its own
         # version and an ordinary CI build is not pretending to be one. Only a release passes the
@@ -205,6 +238,12 @@ jobs:
         run: |
           ls -l TextFix-macos-${{ matrix.target }}.zip
           lipo -info dist/macos/TextFix.app/Contents/MacOS/TextFix
+          codesign -d -r- dist/macos/TextFix.app
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          if [ -n "${MACOS_SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$MACOS_SIGN_KEYCHAIN"; fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
